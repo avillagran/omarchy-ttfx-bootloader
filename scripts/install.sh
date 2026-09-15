@@ -1,9 +1,12 @@
 #!/bin/bash
-set -euo pipefail
+set -eEuo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 state_dir=/var/lib/omarchy-ttfx-bootloader
+helper=/usr/local/lib/omarchy-plymouth-ttfx-install
 arch=$(uname -m)
+new_install=false
+committed=false
 
 case "$arch" in
   x86_64|aarch64) ;;
@@ -12,31 +15,71 @@ esac
 
 command -v pacman >/dev/null || { echo "This installer supports Arch-based Omarchy systems only." >&2; exit 1; }
 
-# Fresh Omarchy installations may have no synchronized package databases yet.
-# Sync while installing only the build/runtime dependencies required here.
-pacman -Sy --needed --noconfirm base-devel rust pkgconf plymouth
+backup_file() {
+  local path=$1 name=${1//\//_}
+  if [[ -e $path || -L $path ]]; then
+    cp -a --no-dereference "$path" "$state_dir/$name"
+  else
+    : > "$state_dir/$name.absent"
+  fi
+}
+
+restore_file() {
+  local path=$1 name=${1//\//_}
+  if [[ -f $state_dir/$name.absent ]]; then
+    rm -f -- "$path"
+  elif [[ -e $state_dir/$name || -L $state_dir/$name ]]; then
+    install -d -m 0755 "${path%/*}"
+    cp -a --remove-destination "$state_dir/$name" "$path"
+  fi
+}
+
+restore_initial_state() {
+  if $new_install && ! $committed; then
+    restore_file /usr/lib/plymouth/ttfx-plymouth.so
+    restore_file /usr/share/plymouth/themes/omarchy/omarchy.plymouth
+    restore_file /usr/share/omarchy/default/plymouth/omarchy.plymouth
+    restore_file "$helper"
+    if [[ -f $state_dir/omarchy-static.absent ]]; then
+      rm -rf -- /usr/share/plymouth/themes/omarchy-static
+    elif [[ -d $state_dir/omarchy-static ]]; then
+      rm -rf -- /usr/share/plymouth/themes/omarchy-static
+      cp -a --no-dereference "$state_dir/omarchy-static" /usr/share/plymouth/themes/omarchy-static
+    fi
+  fi
+}
+on_failure() {
+  local status=$?
+  trap - ERR HUP INT TERM
+  restore_initial_state || true
+  exit "$status"
+}
+trap on_failure ERR HUP INT TERM
+
+# Use a full synchronized transaction, never pacman -Sy partial-upgrade state.
+pacman -Syu --needed --noconfirm base-devel rust pkgconf plymouth
 install -d -m 0700 "$state_dir"
 
-# Keep the prior state for uninstall only once. The native installer owns its
-# own transaction for module/theme/boot-image publication.
 if [[ ! -f $state_dir/.installed ]]; then
-  for path in \
-    /usr/lib/plymouth/ttfx-plymouth.so \
-    /usr/share/plymouth/themes/omarchy/omarchy.plymouth \
-    /usr/share/omarchy/default/plymouth/omarchy.plymouth; do
-    name=${path//\//_}
-    if [[ -e $path || -L $path ]]; then
-      cp -a --no-dereference "$path" "$state_dir/$name"
-    else
-      : > "$state_dir/$name.absent"
-    fi
-  done
+  new_install=true
+  backup_file /usr/lib/plymouth/ttfx-plymouth.so
+  backup_file /usr/share/plymouth/themes/omarchy/omarchy.plymouth
+  backup_file /usr/share/omarchy/default/plymouth/omarchy.plymouth
+  backup_file "$helper"
+  if [[ -e /usr/share/plymouth/themes/omarchy-static || -L /usr/share/plymouth/themes/omarchy-static ]]; then
+    cp -a --no-dereference /usr/share/plymouth/themes/omarchy-static "$state_dir/omarchy-static"
+  else
+    : > "$state_dir/omarchy-static.absent"
+  fi
+  plymouth-set-default-theme > "$state_dir/previous-theme"
 fi
 
 module="$state_dir/ttfx-plymouth-$arch.so"
 "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
-install -m 0755 "$root/bin/omarchy-plymouth-ttfx-install" /usr/local/lib/omarchy-plymouth-ttfx-install
+install -m 0755 "$root/bin/omarchy-plymouth-ttfx-install" "$helper"
 install -m 0644 "$root/default/plymouth/omarchy.plymouth" /usr/share/omarchy/default/plymouth/omarchy.plymouth
-/usr/local/lib/omarchy-plymouth-ttfx-install --module "$module"
+"$helper" --module "$module"
 : > "$state_dir/.installed"
+committed=true
+trap - ERR HUP INT TERM
 echo "Installed TTFX Plymouth for $arch. Reboot to test it."
