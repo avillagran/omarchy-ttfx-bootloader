@@ -530,7 +530,9 @@ install_module() {
 case ${1:-} in
 --module)
   [[ -n ${2:-} && ( $# == 2 || ( $# == 3 && ${3:-} == "--force-enable" ) ) ]] || exit 2
-  install_module "$2" "${3:-false}"
+  force_enable=false
+  [[ ${3:-} != "--force-enable" ]] || force_enable=true
+  install_module "$2" "$force_enable"
   ;;
 --verify-initramfs)
   (( $# == 2 )) || exit 2
