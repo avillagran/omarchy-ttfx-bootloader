@@ -60,12 +60,16 @@ on_failure() {
 trap on_failure ERR HUP INT TERM
 
 missing=()
-for package in base-devel rust pkgconf plymouth; do
+for package in base-devel rust pkgconf python plymouth; do
   pacman -Q "$package" >/dev/null 2>&1 || missing+=("$package")
 done
 if (( ${#missing[@]} )); then
-  printf 'Missing required packages: %s\nRun `omarchy update` and retry.\n' "${missing[*]}" >&2
-  exit 1
+  # This installs only missing build prerequisites. It deliberately does not
+  # synchronize or upgrade the system; Omarchy owns that through `omarchy update`.
+  if ! pacman -S --needed --noconfirm "${missing[@]}"; then
+    printf 'Could not install prerequisites: %s\nRun `omarchy update` and retry.\n' "${missing[*]}" >&2
+    exit 1
+  fi
 fi
 install -d -m 0700 "$state_dir"
 
