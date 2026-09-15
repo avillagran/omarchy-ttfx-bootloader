@@ -12,4 +12,4 @@ Uninstall and restore the previous Plymouth state:
 curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-ttfx-bootloader/ebffbf2194da4489cfd79357161912b7e3aa3109/uninstall.sh | sudo bash
 ```
 
-Reboot after either command. Installation performs a full system upgrade with `pacman -Syu`.
+Reboot after either command. Run `omarchy update` before installing.

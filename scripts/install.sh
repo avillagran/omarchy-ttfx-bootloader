@@ -59,8 +59,14 @@ on_failure() {
 }
 trap on_failure ERR HUP INT TERM
 
-# Use a full synchronized transaction, never pacman -Sy partial-upgrade state.
-pacman -Syu --needed --noconfirm base-devel rust pkgconf plymouth
+missing=()
+for package in base-devel rust pkgconf plymouth; do
+  pacman -Q "$package" >/dev/null 2>&1 || missing+=("$package")
+done
+if (( ${#missing[@]} )); then
+  printf 'Missing required packages: %s\nRun `omarchy update` and retry.\n' "${missing[*]}" >&2
+  exit 1
+fi
 install -d -m 0700 "$state_dir"
 
 if [[ ! -f $state_dir/.installed ]]; then
