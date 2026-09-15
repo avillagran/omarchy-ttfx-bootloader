@@ -12,7 +12,9 @@ esac
 
 command -v pacman >/dev/null || { echo "This installer supports Arch-based Omarchy systems only." >&2; exit 1; }
 
-pacman -S --needed --noconfirm base-devel rust pkgconf plymouth
+# Fresh Omarchy installations may have no synchronized package databases yet.
+# Sync while installing only the build/runtime dependencies required here.
+pacman -Sy --needed --noconfirm base-devel rust pkgconf plymouth
 install -d -m 0700 "$state_dir"
 
 # Keep the prior state for uninstall only once. The native installer owns its
