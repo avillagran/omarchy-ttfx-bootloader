@@ -241,8 +241,17 @@ merge_valid_descriptor_state() {
 }
 
 module_dependencies() {
-  local module=$1 output unresolved dependency canonical
-  output=$(ldd "$module") || { echo "omarchy-plymouth-ttfx-install: unable to inspect module dependencies" >&2; return 1; }
+  local module=$1 output unresolved dependency canonical probe
+  # ldd refuses non-executable .so files on some targets. Inspect a temporary
+  # executable copy so the published Plymouth module may remain mode 0644.
+  probe=$(mktemp --tmpdir="${module%/*}" '.ttfx-ldd.XXXXXXXX')
+  install -m 0755 -- "$module" "$probe"
+  if ! output=$(ldd "$probe"); then
+    rm -f -- "$probe"
+    echo "omarchy-plymouth-ttfx-install: unable to inspect module dependencies" >&2
+    return 1
+  fi
+  rm -f -- "$probe"
   unresolved=$(awk '$2 == "=>" && $3 == "not" && $4 == "found" { print $1 }' <<<"$output")
   if [[ -n $unresolved ]]; then
     while IFS= read -r dependency; do
