@@ -1,6 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
+[[ $EUID == 0 ]] || { echo "Run this script through sudo." >&2; exit 1; }
+export PATH=/usr/bin:/usr/sbin
+
 state_dir=/var/lib/omarchy-ttfx-bootloader
 helper=/usr/local/lib/omarchy-plymouth-ttfx-install
 [[ -f $state_dir/.installed ]] || { echo "No TTFX installer state found." >&2; exit 1; }

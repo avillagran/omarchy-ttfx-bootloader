@@ -1,6 +1,9 @@
 #!/bin/bash
 set -eEuo pipefail
 
+[[ $EUID == 0 ]] || { echo "Run this script through sudo." >&2; exit 1; }
+export PATH=/usr/bin:/usr/sbin
+
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 state_dir=/var/lib/omarchy-ttfx-bootloader
 helper=/usr/local/lib/omarchy-plymouth-ttfx-install
