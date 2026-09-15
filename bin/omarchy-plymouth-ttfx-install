@@ -418,13 +418,14 @@ install_module() {
   if $test_mode && [[ -n ${OMARCHY_PLYMOUTH_TEST_AFTER_OPEN_COMMAND:-} ]]; then
     "$OMARCHY_PLYMOUTH_TEST_AFTER_OPEN_COMMAND"
   fi
-  install -m 0644 "/proc/self/fd/$source_fd" "$work/ttfx-plymouth.so"
+  install -m 0755 "/proc/self/fd/$source_fd" "$work/ttfx-plymouth.so"
   exec {source_fd}<&-
   source_fd=
   if ! $test_mode; then
     chown 0:0 "$work" "$work/ttfx-plymouth.so"
   fi
   validate_module "$work/ttfx-plymouth.so"
+  chmod 0644 "$work/ttfx-plymouth.so"
 
   [[ ! -e $module_path && ! -L $module_path ]] || { cp -a --no-dereference "$module_path" "$backup/module"; module_present=true; }
   [[ ! -e $theme_dir/omarchy.plymouth && ! -L $theme_dir/omarchy.plymouth ]] || { cp -a --no-dereference "$theme_dir/omarchy.plymouth" "$backup/descriptor"; descriptor_present=true; }
@@ -437,11 +438,12 @@ install_module() {
   transaction_active=true
 
   module_stage=$(mktemp --tmpdir="${module_path%/*}" '.ttfx-plymouth.so.XXXXXXXX')
-  install -m 0644 "$work/ttfx-plymouth.so" "$module_stage"
+  install -m 0755 "$work/ttfx-plymouth.so" "$module_stage"
   if ! $test_mode; then
     chown 0:0 "$module_stage"
   fi
   validate_module "$module_stage"
+  chmod 0644 "$module_stage"
 
   recovery_stage=$(mktemp -d --tmpdir="${recovery_dir%/*}" '.omarchy-static.XXXXXXXX')
   cp -a "$theme_dir/." "$recovery_stage/"
