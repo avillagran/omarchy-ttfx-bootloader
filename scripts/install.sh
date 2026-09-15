@@ -91,7 +91,7 @@ module="$state_dir/ttfx-plymouth-$arch.so"
 "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
 install -m 0755 "$root/bin/omarchy-plymouth-ttfx-install" "$helper"
 install -m 0644 "$root/default/plymouth/omarchy.plymouth" /usr/share/omarchy/default/plymouth/omarchy.plymouth
-"$helper" --module "$module"
+"$helper" --module "$module" --force-enable
 : > "$state_dir/.installed"
 committed=true
 trap - ERR HUP INT TERM
