@@ -10,6 +10,11 @@ for script in install.sh uninstall.sh scripts/install.sh scripts/uninstall.sh bi
 done
 pass "shell scripts parse"
 
+grep -F 'sudo "$tmp/scripts/install.sh"' "$root/install.sh" >/dev/null || fail "oneliner does not enter the privileged installer"
+grep -F 'OMARCHY_TTFX_ARCHIVE' "$root/install.sh" >/dev/null || fail "oneliner cannot use a verified staging archive"
+grep -F 'OMARCHY_TTFX_SHA256' "$root/install.sh" >/dev/null || fail "oneliner staging archive cannot be hash-pinned"
+pass "oneliner enters sudo and supports hash-pinned staging"
+
 grep -Fx '#define TTFX_PLAYBACK_STEPS_PER_TICK 2U' "$root/native/plymouth-ttfx-plugin/state.h" >/dev/null || fail "native state is not 2x"
 grep -Fx '#define ENGINE_STEPS_PER_TICK 2U' "$root/native/plymouth-ttfx-plugin/plugin.c" >/dev/null || fail "handoff contract is not 2x"
 grep -Fx 'const BOOT_STEPS_PER_TICK: usize = 2;' "$root/bridge/src/main.rs" >/dev/null || fail "desktop bridge is not 2x"
