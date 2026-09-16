@@ -37,6 +37,8 @@ restore_file /usr/lib/plymouth/ttfx-plymouth.so
 restore_file /usr/share/plymouth/themes/omarchy/omarchy.plymouth
 restore_file /usr/share/omarchy/default/plymouth/omarchy.plymouth
 restore_file /etc/plymouth/plymouthd.conf
+restore_file /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf
+restore_file /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf
 restore_file "$helper"
 restore_file "$menu_extension"
 for directory in "${runtime_dirs[@]}"; do
