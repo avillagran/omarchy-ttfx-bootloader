@@ -66,7 +66,7 @@ pub fn validate_canvas(width: usize, height: usize) -> Result<usize, EngineError
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepOutcome {
     Frame = 0,
-    Looped = 1,
+    Completed = 1,
 }
 
 struct Parameters {
@@ -86,6 +86,7 @@ pub struct Engine {
     cells: Vec<Cell>,
     width: usize,
     height: usize,
+    completed: bool,
 }
 
 /// Opaque C handle. It must be used and freed on the creating thread.
@@ -139,6 +140,7 @@ impl Engine {
             cells: Vec::with_capacity(cell_count),
             width: width as usize,
             height: height as usize,
+            completed: false,
         };
         engine
             .effect
@@ -149,19 +151,22 @@ impl Engine {
     }
 
     pub fn step(&mut self) -> Result<StepOutcome, EngineError> {
-        let outcome = if self.effect.next_frame(&mut self.ctx).is_some() {
-            StepOutcome::Frame
+        if self.completed {
+            return Ok(StepOutcome::Completed);
+        }
+        if self.effect.next_frame(&mut self.ctx).is_some() {
+            self.snapshot();
+            Ok(StepOutcome::Frame)
         } else {
-            self.restart()?;
-            StepOutcome::Looped
-        };
-        self.snapshot();
-        Ok(outcome)
+            self.completed = true;
+            Ok(StepOutcome::Completed)
+        }
     }
 
     pub fn reset(&mut self) -> Result<(), EngineError> {
         self.restart()?;
         self.snapshot();
+        self.completed = false;
         Ok(())
     }
 
@@ -202,8 +207,27 @@ fn top_to_bottom<T: Clone>(bottom_up: &[T], width: usize, height: usize) -> Vec<
 }
 
 fn build_instance(parameters: &Parameters) -> Result<(Box<dyn Effect>, EngineCtx), EngineError> {
-    let cli = Cli::try_parse_from(["ttfx", parameters.effect_name.as_str()])
-        .map_err(|_| EngineError::InvalidEffect)?;
+    let mut arguments = vec!["ttfx", parameters.effect_name.as_str()];
+    if parameters.effect_name == "decrypt" {
+        arguments.extend([
+            "--final-gradient-stops",
+            // Canonical Omarchy field colors, top to bottom. The vendored
+            // final-text mapper applies the shared 4:3:4:3:5 row bands.
+            "d0fdd9",
+            "a8fcba",
+            "82fb9c",
+            "539e65",
+            "2b5037",
+            "--final-gradient-steps",
+            "1",
+            "1",
+            "1",
+            "1",
+            "--final-gradient-direction",
+            "vertical",
+        ]);
+    }
+    let cli = Cli::try_parse_from(arguments).map_err(|_| EngineError::InvalidEffect)?;
     let mut config = cli.terminal_config();
     let command = cli.effect.ok_or(EngineError::InvalidEffect)?;
     config.canvas_width = i64::from(parameters.width);
@@ -221,6 +245,7 @@ fn build_instance(parameters: &Parameters) -> Result<(Box<dyn Effect>, EngineCtx
     )
     .map_err(|_| EngineError::Build)?;
     ctx.set_structured_output(true);
+    ctx.final_text_bands = true;
     let mut effect = command.build_effect();
     effect.build(&mut ctx).map_err(|_| EngineError::Build)?;
     Ok((effect, ctx))
@@ -430,7 +455,7 @@ pub unsafe extern "C" fn ttfx_engine_step(engine: *mut TtfxEngine, out_looped: *
     unsafe {
         ffi_mutating_boundary(engine, |engine| match engine.inner.step() {
             Ok(outcome) => {
-                *out_looped = u8::from(outcome == StepOutcome::Looped);
+                *out_looped = u8::from(outcome == StepOutcome::Completed);
                 TTFX_STATUS_OK
             }
             Err(error) => status(error),

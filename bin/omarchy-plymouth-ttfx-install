@@ -201,29 +201,32 @@ valid_uint64() {
 }
 
 merge_valid_descriptor_state() {
-  local source=$1 destination=$2 mode enabled effect seed key value catalog owner permissions expected_owner
+  local source=$1 destination=$2 mode enabled effect seed playback key value catalog owner permissions expected_owner
   mode=$(descriptor_value "$source" Mode)
   enabled=$(descriptor_value "$source" Enabled)
   effect=$(descriptor_value "$source" Effect)
   seed=$(descriptor_value "$source" Seed)
+  playback=$(descriptor_value "$source" PlaybackMode)
   catalog="$theme_dir/ttfx-effects.txt"
   if $test_mode; then expected_owner=$EUID; else expected_owner=0; fi
 
-  if [[ -z $mode && -z $enabled && -z $effect && -z $seed ]]; then
-    mode=$(descriptor_value "$destination" Mode)
-    enabled=$(descriptor_value "$destination" Enabled)
-    effect=$(descriptor_value "$destination" Effect)
-    seed=$(descriptor_value "$destination" Seed)
-  elif [[ $mode == off && $enabled == false && $effect == off && $seed == 0 ]]; then
-    :
-  elif [[ $mode == fixed || $mode == random ]] && [[ $enabled == true ]] &&
+  if [[ $mode == fixed || $mode == random ]] && [[ $enabled == true ]] &&
     [[ $effect =~ ^[A-Za-z0-9_-]+$ ]] && valid_uint64 "$seed" &&
     [[ -f $catalog && ! -L $catalog ]] &&
     owner=$(stat -Lc %u -- "$catalog") && permissions=$(stat -Lc %a -- "$catalog") &&
     (( owner == expected_owner && (8#$permissions & 0022) == 0 )) && grep -Fx -- "$effect" "$catalog" >/dev/null; then
     :
   else
-    mode=off enabled=false effect=off seed=0
+    # Missing, corrupt, and legacy Off state all normalize to the template's
+    # enabled Decrypt default. A valid user selection is preserved above.
+    mode=$(descriptor_value "$destination" Mode)
+    enabled=$(descriptor_value "$destination" Enabled)
+    effect=$(descriptor_value "$destination" Effect)
+    seed=$(descriptor_value "$destination" Seed)
+  fi
+
+  if [[ $playback != continuous && $playback != submit-to-finish ]]; then
+    playback=$(descriptor_value "$destination" PlaybackMode)
   fi
 
   sed -i \
@@ -231,6 +234,7 @@ merge_valid_descriptor_state() {
     -e "s/^Mode=.*/Mode=$mode/" \
     -e "s/^Effect=.*/Effect=$effect/" \
     -e "s/^Seed=.*/Seed=$seed/" \
+    -e "s/^PlaybackMode=.*/PlaybackMode=$playback/" \
     "$destination"
 
   for key in BackgroundColor TextColor MessageColor; do
@@ -335,6 +339,15 @@ install_module() {
   committed=false
   rollback_failed=0
 
+  # Plymouth 26 cannot insert [Daemon] into a zero-byte configuration because
+  # its sed command has no input line to address. Make theme selection real
+  # before switching to recovery/native themes.
+  install -d -m 0755 "$system_root/etc/plymouth"
+  if [[ ! -s $system_root/etc/plymouth/plymouthd.conf ]]; then
+    printf '[Daemon]\n' >"$system_root/etc/plymouth/plymouthd.conf"
+    chmod 0644 "$system_root/etc/plymouth/plymouthd.conf"
+  fi
+
   check_abi
   [[ -f $theme_dir/omarchy.plymouth && -f $theme_dir/omarchy.script ]] || { echo "installed Omarchy theme is incomplete" >&2; return 1; }
   canonical_template=$(validate_native_template)
@@ -434,7 +447,6 @@ install_module() {
     chown 0:0 "$work" "$work/ttfx-plymouth.so"
   fi
   validate_module "$work/ttfx-plymouth.so"
-  chmod 0644 "$work/ttfx-plymouth.so"
 
   [[ ! -e $module_path && ! -L $module_path ]] || { cp -a --no-dereference "$module_path" "$backup/module"; module_present=true; }
   [[ ! -e $theme_dir/omarchy.plymouth && ! -L $theme_dir/omarchy.plymouth ]] || { cp -a --no-dereference "$theme_dir/omarchy.plymouth" "$backup/descriptor"; descriptor_present=true; }
@@ -452,7 +464,6 @@ install_module() {
     chown 0:0 "$module_stage"
   fi
   validate_module "$module_stage"
-  chmod 0644 "$module_stage"
 
   recovery_stage=$(mktemp -d --tmpdir="${recovery_dir%/*}" '.omarchy-static.XXXXXXXX')
   cp -a "$theme_dir/." "$recovery_stage/"

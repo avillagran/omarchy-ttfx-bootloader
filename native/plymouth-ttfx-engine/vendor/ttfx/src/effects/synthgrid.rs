@@ -309,14 +309,8 @@ impl Effect for SynthGrid {
             false,
         )
         .map_err(EngineError::Other)?;
-        let text_gradient_mapping = text_gradient
-            .build_coordinate_color_mapping(
-                ctx.terminal.canvas.text_bottom,
-                ctx.terminal.canvas.text_top,
-                ctx.terminal.canvas.text_left,
-                ctx.terminal.canvas.text_right,
-                self.config.text_gradient_direction,
-            )
+        let text_gradient_mapping = ctx
+            .final_gradient_mapping(&text_gradient, self.config.text_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = ctx.terminal.get_characters(

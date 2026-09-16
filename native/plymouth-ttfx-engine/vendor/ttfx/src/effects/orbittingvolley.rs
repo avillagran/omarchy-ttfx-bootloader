@@ -235,14 +235,8 @@ impl Effect for OrbittingVolley {
             false,
         )
         .map_err(EngineError::Other)?;
-        let final_gradient_coordinate_map = final_gradient
-            .build_coordinate_color_mapping(
-                ctx.terminal.canvas.text_bottom,
-                ctx.terminal.canvas.text_top,
-                ctx.terminal.canvas.text_left,
-                ctx.terminal.canvas.text_right,
-                self.config.final_gradient_direction,
-            )
+        let final_gradient_coordinate_map = ctx
+            .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         self.launcher_gradient_coordinate_map = final_gradient
             .build_coordinate_color_mapping(

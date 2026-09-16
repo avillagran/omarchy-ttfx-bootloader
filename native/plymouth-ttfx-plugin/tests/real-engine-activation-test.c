@@ -43,8 +43,14 @@ static void test_loop_local_replay(void)
                 for (unsigned int i = 0; i < 3; i++) {
                         uint8_t looped;
                         assert(ttfx_engine_step(engine, &looped) == TTFX_STATUS_OK);
-                        if (looped) { step = 0; cycles++; verify_replay(engine, 0); }
-                        else step++;
+                        if (looped) {
+                                assert(ttfx_engine_reset(engine) == TTFX_STATUS_OK);
+                                step = 0;
+                                cycles++;
+                                verify_replay(engine, 0);
+                        } else {
+                                step++;
+                        }
                 }
                 if (ticks == 0 || cycles > 0) verify_replay(engine, step);
                 ticks++;

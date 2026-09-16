@@ -28,6 +28,7 @@ typedef struct {
         uint64_t seed;
         ttfx_phase_t phase;
         uint32_t width, height, fps, speed, background, foreground;
+        bool hold_final;
 } ttfx_handoff_t;
 /* open verifies fixed /run, root ownership and tmpfs. No path/env overrides.
  * publish accepts only that trusted directory fd in production. */
@@ -42,12 +43,25 @@ void ttfx_handoff_close(int directory);
 #define TTFX_REACTION_TICKS 168U
 #define TTFX_FAILURE_CANDIDATE_TICKS 1200U
 #define TTFX_REACTION_OFFSET_TICKS 24U
+#define TTFX_PLAYBACK_STEPS_PER_TICK 2U
+#define TTFX_FAST_FORWARD_STEPS_PER_TICK 8U
 
 typedef enum {
         TTFX_PROMPT_NONE,
         TTFX_PROMPT_PASSWORD,
         TTFX_PROMPT_QUESTION
 } ttfx_prompt_mode_t;
+
+typedef enum {
+        TTFX_PLAYBACK_SUBMIT_TO_FINISH,
+        TTFX_PLAYBACK_CONTINUOUS
+} ttfx_playback_mode_t;
+
+typedef enum {
+        TTFX_PLAYBACK_INPUT,
+        TTFX_PLAYBACK_FAST_FORWARD,
+        TTFX_PLAYBACK_FINAL
+} ttfx_playback_phase_t;
 
 typedef struct ttfx_message ttfx_message_t;
 
@@ -65,6 +79,8 @@ typedef struct {
         bool rendering_failed;
         bool failure_candidate_ready;
         bool reaction_active;
+        ttfx_playback_mode_t playback_mode;
+        ttfx_playback_phase_t playback_phase;
         unsigned int failure_candidate_tick;
         unsigned int reaction_tick;
 } ttfx_state_t;
@@ -103,6 +119,10 @@ void ttfx_state_fail_rendering(ttfx_state_t *state);
 void ttfx_state_set_normal(ttfx_state_t *state);
 void ttfx_state_clear_prompt(ttfx_state_t *state);
 bool ttfx_state_set_password(ttfx_state_t *state, const char *prompt, int bullets);
+bool ttfx_state_set_playback_mode(ttfx_state_t *state, const char *mode);
+unsigned int ttfx_state_engine_steps_per_tick(const ttfx_state_t *state);
+void ttfx_state_confirm_success(ttfx_state_t *state);
+void ttfx_state_engine_completed(ttfx_state_t *state);
 bool ttfx_state_password_pending(const ttfx_state_t *state);
 bool ttfx_state_reaction_active(const ttfx_state_t *state);
 int ttfx_state_reaction_x_offset(const ttfx_state_t *state);

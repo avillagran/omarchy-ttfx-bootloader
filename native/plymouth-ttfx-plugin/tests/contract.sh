@@ -34,7 +34,7 @@ require_literal "ttfx_engine_cells" "$plugin"
 require_literal "ttfx_engine_free" "$plugin"
 require_literal '"decrypt"' "$plugin"
 require_literal '#define FRAME_INTERVAL_SECONDS (1.0 / 240.0)' "$plugin"
-require_literal '#define ENGINE_STEPS_PER_TICK 1U' "$plugin"
+require_literal '#define ENGINE_STEPS_PER_TICK 2U' "$plugin"
 require_literal '#define ENGINE_FPS 240U' "$plugin"
 require_literal '#define ENGINE_WIDTH 162U' "$plugin"
 require_literal '#define ENGINE_HEIGHT 20U' "$plugin"
@@ -79,8 +79,8 @@ if "ttfx_engine_step" in body("on_draw") or "ttfx_engine_cells" in body("on_draw
 timeout = body("on_timeout")
 if timeout.count("ttfx_engine_step") != 1:
     raise SystemExit("FAIL: timeout must advance exactly one simulation step")
-if timeout.count("update_snapshot") != 1:
-    raise SystemExit("FAIL: timeout must fetch exactly one post-step snapshot")
+if timeout.count("update_snapshot") != 2:
+    raise SystemExit("FAIL: timeout must snapshot both normal steps and explicit cycle resets")
 if "damage_all_views" not in timeout:
     raise SystemExit("FAIL: timeout must damage every view")
 

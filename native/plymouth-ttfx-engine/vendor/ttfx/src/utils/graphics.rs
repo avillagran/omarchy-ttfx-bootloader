@@ -284,6 +284,38 @@ impl Gradient {
         Ok(self.spectrum.last().unwrap())
     }
 
+    /// Five solid horizontal bands, top to bottom, with 4:3:4:3:5 row weights.
+    /// Round cumulative boundaries to the nearest row (half up), relative to
+    /// the supplied text bounds. Sample the authored spectrum at quarter points;
+    /// never change the spectrum itself, which animation scenes also consume.
+    pub fn build_banded_coordinate_color_mapping(
+        &self,
+        min_row: i64,
+        max_row: i64,
+        min_column: i64,
+        max_column: i64,
+    ) -> Result<CoordColorMap, String> {
+        if min_row < 1 || min_column < 1 || min_row > max_row || min_column > max_column {
+            return Err("Invalid text bounds for horizontal bands.".to_string());
+        }
+        let height = i128::from(max_row - min_row) + 1;
+        let boundaries = [4, 7, 11, 14].map(|weight| (height * weight + 9) / 19);
+        let colors = [0.0, 0.25, 0.5, 0.75, 1.0]
+            .map(|fraction| self.get_color_at_fraction(fraction).cloned())
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut mapping = CoordColorMap::default();
+        // Keep the usual vertical-map insertion order (bottom to top).
+        for row in min_row..=max_row {
+            let from_top = i128::from(max_row - row);
+            let band = boundaries.iter().filter(|&&end| from_top >= end).count();
+            for column in min_column..=max_column {
+                mapping.insert(Coord::new(column, row), colors[band].clone());
+            }
+        }
+        Ok(mapping)
+    }
+
     /// build_coordinate_color_mapping with upstream's insertion order per direction.
     pub fn build_coordinate_color_mapping(
         &self,
@@ -397,6 +429,33 @@ mod tests {
     use std::collections::HashMap;
 
     use super::Color;
+
+    #[test]
+    fn final_text_has_five_solid_top_to_bottom_bands() {
+        use super::Gradient;
+        use crate::utils::geometry::Coord;
+        let stops = ["112244", "44aacc", "ffeedd"].map(|hex| Color::from_hex(hex).unwrap());
+        let gradient = Gradient::with_steps(&stops, 12, false).unwrap();
+        let mapping = gradient
+            .build_banded_coordinate_color_mapping(8, 26, 3, 10)
+            .unwrap();
+        let expected = [4, 3, 4, 3, 5];
+        let mut row = 26;
+        for (band, count) in expected.into_iter().enumerate() {
+            let color = gradient.get_color_at_fraction(band as f64 / 4.0).unwrap();
+            for _ in 0..count {
+                for column in 3..=10 {
+                    assert_eq!(
+                        mapping.get(&Coord::new(column, row)),
+                        Some(color),
+                        "band {band}, row {row}"
+                    );
+                }
+                row -= 1;
+            }
+        }
+        assert_eq!(row, 7);
+    }
 
     #[test]
     fn rgb_string_borrowed_lookup_matches_str_hash() {

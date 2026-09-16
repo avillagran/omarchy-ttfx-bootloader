@@ -583,14 +583,8 @@ impl Effect for Blackhole {
             false,
         )
         .map_err(EngineError::Other)?;
-        let final_gradient_mapping = final_gradient
-            .build_coordinate_color_mapping(
-                ctx.terminal.canvas.text_bottom,
-                ctx.terminal.canvas.text_top,
-                ctx.terminal.canvas.text_left,
-                ctx.terminal.canvas.text_right,
-                self.config.final_gradient_direction,
-            )
+        let final_gradient_mapping = ctx
+            .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let characters = {
             let filter = CharacterFilter::default();
