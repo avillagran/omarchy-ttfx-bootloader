@@ -886,16 +886,18 @@ static void test_wrong_password_composites_horizontal_red_reaction_without_engin
                 assert(image_composite_y == entry_y + (48L - 38L) / 2L);
                 assert(last_entry_show_x == entry_x + expected_offset);
                 assert(last_entry_show_y == entry_y);
+                /* submit accelerates towards the final frame; the retry
+                 * keeps the same engine without a hard reset. */
                 assert(engine_creates == 1U &&
-                       engine_steps == tick * TTFX_PLAYBACK_STEPS_PER_TICK &&
+                       engine_steps == tick * TTFX_FAST_FORWARD_STEPS_PER_TICK &&
                        engine_frees == 0U);
                 loop.timeout_handler(loop.timeout_data, &loop);
         }
         assert(!ttfx_state_reaction_active(&plugin->state));
         assert(engine_creates == 1U &&
-               engine_steps == TTFX_REACTION_TICKS * TTFX_PLAYBACK_STEPS_PER_TICK &&
+               engine_steps == TTFX_REACTION_TICKS * TTFX_FAST_FORWARD_STEPS_PER_TICK &&
                engine_frees == 0U);
-        assert(plugin->phase.step == TTFX_REACTION_TICKS * TTFX_PLAYBACK_STEPS_PER_TICK);
+        assert(plugin->phase.step == TTFX_REACTION_TICKS * TTFX_FAST_FORWARD_STEPS_PER_TICK);
 
         captured_count = 0U;
         glitch_red_fills = 0U;
@@ -1078,7 +1080,8 @@ static void test_default_input_only_plays_once_and_freezes(void)
         display_password(plugin, "Password", 4);
         display_normal(plugin);
         assert(plugin->state.playback_mode == TTFX_PLAYBACK_SUBMIT_TO_FINISH);
-        assert(plugin->state.playback_phase == TTFX_PLAYBACK_INPUT);
+        /* the submit accelerates towards the final frame for the verdict */
+        assert(plugin->state.playback_phase == TTFX_PLAYBACK_FAST_FORWARD);
 
         mock_loop_on_step = 1U;
         on_timeout(plugin, &loop);
@@ -1127,12 +1130,16 @@ static void test_wrong_password_does_not_restart_input_only_playback(void)
         assert(show_splash_screen(plugin, &loop, NULL, 0));
         display_password(plugin, "Password", 5);
         display_normal(plugin);
+        assert(plugin->state.playback_phase == TTFX_PLAYBACK_FAST_FORWARD);
+        mock_loop_on_step = 2U;
         on_timeout(plugin, &loop);
-        assert(plugin->state.playback_phase == TTFX_PLAYBACK_INPUT);
+        assert(plugin->state.playback_phase == TTFX_PLAYBACK_FINAL);
 
         display_password(plugin, "Password", 0);
         assert(ttfx_state_reaction_active(&plugin->state));
         assert(plugin->state.playback_phase == TTFX_PLAYBACK_INPUT);
+        assert(engine_resets == 0U);
+        on_timeout(plugin, &loop);
         assert(engine_resets == 0U);
         destroy_plugin(plugin);
 }

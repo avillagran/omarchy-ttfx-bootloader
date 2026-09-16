@@ -27,8 +27,9 @@ static void test_input_only_freezes_after_first_natural_completion(void)
 
         assert(ttfx_state_set_password(&state, "Password", 4));
         ttfx_state_set_normal(&state);
-        assert(state.playback_phase == TTFX_PLAYBACK_INPUT);
-        assert(ttfx_state_engine_steps_per_tick(&state) == 2U);
+        assert(state.playback_phase == TTFX_PLAYBACK_FAST_FORWARD);
+        assert(ttfx_state_engine_steps_per_tick(&state) ==
+               TTFX_FAST_FORWARD_STEPS_PER_TICK);
 
         ttfx_state_engine_completed(&state);
         assert(state.playback_phase == TTFX_PLAYBACK_FINAL);
@@ -77,11 +78,52 @@ static void test_retry_returns_submit_to_finish_mode_to_input(void)
 
         assert(ttfx_state_set_password(&state, "Password", 5));
         ttfx_state_set_normal(&state);
-        assert(state.playback_phase == TTFX_PLAYBACK_INPUT);
+        assert(state.playback_phase == TTFX_PLAYBACK_FAST_FORWARD);
+        ttfx_state_engine_completed(&state);
+        assert(state.playback_phase == TTFX_PLAYBACK_FINAL);
         assert(ttfx_state_set_password(&state, "Password", 0));
         assert(ttfx_state_reaction_active(&state));
         assert(state.playback_phase == TTFX_PLAYBACK_INPUT);
         assert(ttfx_state_engine_steps_per_tick(&state) == 2U);
+        ttfx_state_destroy(&state);
+}
+
+static void test_submit_accelerates_to_final_for_verdict(void)
+{
+        ttfx_state_t state = ttfx_state_initial();
+
+        assert(ttfx_state_set_password(&state, "Password", 4));
+        ttfx_state_set_normal(&state);
+        assert(state.playback_phase == TTFX_PLAYBACK_FAST_FORWARD);
+        assert(ttfx_state_engine_steps_per_tick(&state) ==
+               TTFX_FAST_FORWARD_STEPS_PER_TICK);
+        ttfx_state_destroy(&state);
+}
+
+static void test_failed_answer_mid_fast_forward_loops_after_final(void)
+{
+        ttfx_state_t state = ttfx_state_initial();
+
+        assert(ttfx_state_set_password(&state, "Password", 4));
+        ttfx_state_set_normal(&state);
+        assert(ttfx_state_set_password(&state, "Password", 0));
+        assert(ttfx_state_reaction_active(&state));
+        assert(state.playback_phase == TTFX_PLAYBACK_FAST_FORWARD);
+        ttfx_state_engine_completed(&state);
+        assert(state.playback_phase == TTFX_PLAYBACK_FINAL);
+        ttfx_state_tick(&state);
+        assert(state.playback_phase == TTFX_PLAYBACK_INPUT);
+        assert(ttfx_state_engine_steps_per_tick(&state) == 2U);
+        ttfx_state_destroy(&state);
+}
+
+static void test_empty_submit_does_not_accelerate(void)
+{
+        ttfx_state_t state = ttfx_state_initial();
+
+        assert(ttfx_state_set_password(&state, "Password", 0));
+        ttfx_state_set_normal(&state);
+        assert(state.playback_phase == TTFX_PLAYBACK_INPUT);
         ttfx_state_destroy(&state);
 }
 
@@ -440,6 +482,9 @@ int main(void)
         test_input_only_fast_forwards_when_success_precedes_completion();
         test_continuous_mode_preserves_current_looping_behavior();
         test_retry_returns_submit_to_finish_mode_to_input();
+        test_submit_accelerates_to_final_for_verdict();
+        test_failed_answer_mid_fast_forward_loops_after_final();
+        test_empty_submit_does_not_accelerate();
         test_failed_nonempty_password_replacement_triggers_once();
         test_password_candidate_expires_to_normal();
         test_clear_prompt_never_arms_password_failure();

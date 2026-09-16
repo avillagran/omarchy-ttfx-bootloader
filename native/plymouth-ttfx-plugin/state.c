@@ -245,6 +245,11 @@ void ttfx_state_tick(ttfx_state_t *state)
                 }
         }
         if (state->reaction_active) {
+                /* A retry must keep looping: once the fast-forward lands on
+                 * the final frame, hand control back to the input loop
+                 * instead of freezing there. */
+                if (state->playback_phase == TTFX_PLAYBACK_FINAL)
+                        state->playback_phase = TTFX_PLAYBACK_INPUT;
                 state->reaction_tick++;
                 if (state->reaction_tick >= TTFX_REACTION_TICKS)
                         state->reaction_active = false;
@@ -273,6 +278,12 @@ void ttfx_state_set_normal(ttfx_state_t *state)
         if (state->prompt_mode == TTFX_PROMPT_PASSWORD && state->bullets > 0 &&
             state->prompt != NULL && state->prompt[0] != '\0') {
                 state->failure_candidate_ready = true;
+                /* The answer was submitted and is being verified: accelerate
+                 * towards the final frame now, so a possible error is shown
+                 * there with motion instead of after an unanimated wait. */
+                if (state->playback_mode == TTFX_PLAYBACK_SUBMIT_TO_FINISH &&
+                    state->playback_phase == TTFX_PLAYBACK_INPUT)
+                        state->playback_phase = TTFX_PLAYBACK_FAST_FORWARD;
                 return;
         }
         ttfx_state_clear_prompt(state);
@@ -305,6 +316,12 @@ bool ttfx_state_set_password(ttfx_state_t *state, const char *prompt, int bullet
             state->prompt != NULL && strcmp(state->prompt, prompt_copy) == 0) {
                 state->reaction_active = true;
                 state->reaction_tick = 0U;
+                /* Wrong answer: the fast-forward already reached (or is about
+                 * to reach) the final frame. Resume looping from the natural
+                 * tape boundary instead of hard-resetting the animation. */
+                if (state->playback_mode == TTFX_PLAYBACK_SUBMIT_TO_FINISH &&
+                    state->playback_phase == TTFX_PLAYBACK_FINAL)
+                        state->playback_phase = TTFX_PLAYBACK_INPUT;
         }
         free(state->failure_candidate_prompt);
         state->failure_candidate_prompt = NULL;
