@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-archive=${OMARCHY_TTFX_ARCHIVE:-https://github.com/avillagran/omarchy-ttfx-bootloader/archive/f17d59642b3dec06eca8edc34c7ea7c72887bb9f.tar.gz}
-expected_sha256=${OMARCHY_TTFX_SHA256:-dab670a6c7bf509fe06d6b75be123e558a0f46d9b2b36339b861fb39d2f47407}
+archive=${OMARCHY_TTFX_ARCHIVE:-https://github.com/avillagran/omarchy-ttfx-bootloader/archive/430fafeedbc5f2c9504e7fbcfdb568eed901a484.tar.gz}
+expected_sha256=${OMARCHY_TTFX_SHA256:-d534608f074f623c5240071db387367d7f542e569d78f0372282452452f01f77}
 tmp=$(mktemp -d /tmp/omarchy-ttfx-bootloader.XXXXXXXX)
 trap 'rm -rf "$tmp"' EXIT
 
