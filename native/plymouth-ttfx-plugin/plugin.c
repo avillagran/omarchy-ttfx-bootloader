@@ -80,6 +80,8 @@ struct _ply_boot_splash_plugin {
         bool lock_scale_attempted;
         bool progress_assets_attempted;
         bool progress_visible;
+        bool progress_ever_shown;
+        bool hold_final_frame;
         bool boot_progress_allowed;
         double progress_fraction;
         uint64_t progress_started_ns;
@@ -179,6 +181,8 @@ static void start_progress(ply_boot_splash_plugin_t *plugin)
         if (!plugin->boot_progress_allowed || !ensure_progress_assets(plugin))
                 return;
         plugin->progress_visible = true;
+        plugin->progress_ever_shown = true;
+        plugin->hold_final_frame = false;
         plugin->progress_fraction = 0.0;
         plugin->progress_started_ns = plugin->clock_ns != NULL ? plugin->clock_ns() : 0U;
 }
@@ -189,6 +193,8 @@ static void resume_progress(ply_boot_splash_plugin_t *plugin)
             !plugin->boot_progress_allowed || !ensure_progress_assets(plugin))
                 return;
         plugin->progress_visible = true;
+        plugin->progress_ever_shown = true;
+        plugin->hold_final_frame = false;
         if (plugin->progress_started_ns == 0U)
                 plugin->progress_started_ns = plugin->clock_ns != NULL ? plugin->clock_ns() : 0U;
 }
@@ -772,7 +778,8 @@ static void on_draw(void *user_data,
                 if (covers_grid && plugin->visible && plugin->state.animation_enabled &&
                     plugin->cells != NULL && plugin->canvas_width == ENGINE_WIDTH &&
                     plugin->canvas_height == ENGINE_HEIGHT) {
-                        memcpy(plugin->drawn_cells, plugin->cells, sizeof(plugin->drawn_cells));
+                        if (plugin->cells != plugin->drawn_cells)
+                                memcpy(plugin->drawn_cells, plugin->cells, sizeof(plugin->drawn_cells));
                         plugin->drawn_phase = plugin->phase;
                         plugin->drawn_valid = true;
                 }
@@ -832,7 +839,7 @@ static void on_timeout(void *user_data, ply_event_loop_t *loop)
         }
         for (view_t *view = plugin->views; view != NULL; view = view->next)
                 sync_password_entry_reaction_position(view);
-        if (animation_active) {
+        if (animation_active && !plugin->hold_final_frame) {
                 for (unsigned int step = 0U; step < ENGINE_STEPS_PER_TICK; step++) {
                         clear_snapshot(plugin);
                         if (ttfx_engine_step(plugin->engine, &looped) != TTFX_STATUS_OK ||
@@ -845,6 +852,23 @@ static void on_timeout(void *user_data, ply_event_loop_t *loop)
                                 return;
                         }
                         if (looped) {
+                                if (!plugin->progress_visible && plugin->progress_ever_shown) {
+                                        /* The progress bar is hidden (input
+                                         * phase or boot finished): do not
+                                         * restart the effect. Hold the final
+                                         * gradient-logo frame instead. The
+                                         * just-looped snapshot already points
+                                         * at frame 0, so repoint the cells at
+                                         * the last fully painted frame. */
+                                        plugin->hold_final_frame = true;
+                                        if (plugin->drawn_valid) {
+                                                plugin->cells = plugin->drawn_cells;
+                                                plugin->cell_count = (size_t)ENGINE_WIDTH * (size_t)ENGINE_HEIGHT;
+                                                plugin->canvas_width = ENGINE_WIDTH;
+                                                plugin->canvas_height = ENGINE_HEIGHT;
+                                        }
+                                        break;
+                                }
                                 plugin->phase.step = 0U;
                                 if (plugin->phase.cycle != UINT64_MAX)
                                         plugin->phase.cycle++;
