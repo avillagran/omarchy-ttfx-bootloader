@@ -15,14 +15,19 @@ fn creates_real_print_effect_with_a_full_structured_frame() {
 }
 
 #[test]
-fn completion_restarts_with_the_same_seed_and_first_frame() {
+fn completion_keeps_the_terminal_frame_until_explicit_reset() {
     let mut engine = Engine::create("print", 0x55aa, "Loop me", 12, 2, 60).unwrap();
     let first = engine.cells().to_vec();
     assert_eq!(engine.step().unwrap(), StepOutcome::Frame);
     assert_ne!(engine.cells(), first);
 
     for _ in 0..10_000 {
-        if engine.step().unwrap() == StepOutcome::Looped {
+        if engine.step().unwrap() == StepOutcome::Completed {
+            let terminal = engine.cells().to_vec();
+            assert_ne!(terminal, first);
+            assert_eq!(engine.step().unwrap(), StepOutcome::Completed);
+            assert_eq!(engine.cells(), terminal);
+            engine.reset().unwrap();
             assert_eq!(engine.cells(), first);
             return;
         }
@@ -77,6 +82,92 @@ fn accepts_subdivided_logo_without_loosening_the_cell_budget() {
         ttfx_plymouth::validate_canvas(162, 30),
         Err(ttfx_plymouth::EngineError::InvalidDimensions)
     );
+}
+
+#[test]
+fn terminal_decrypt_frame_matches_the_pr29_field_bands() {
+    let logo = include_str!("../../plymouth-ttfx-plugin/embedded-logo-v2.txt");
+    let mut engine = Engine::create("decrypt", 7, logo, 162, 20, 240).unwrap();
+
+    for _ in 0..10_000 {
+        if engine.step().unwrap() == StepOutcome::Completed {
+            let (width, height) = engine.dimensions();
+            let colors_by_nonempty_row: Vec<u32> = (0..height)
+                .filter_map(|row| {
+                    let colors: std::collections::BTreeSet<u32> = engine.cells()
+                        [row * width..(row + 1) * width]
+                        .iter()
+                        .filter(|cell| cell.codepoint != u32::from(' '))
+                        .map(|cell| cell.fg_rgba)
+                        .collect();
+                    assert!(
+                        colors.len() <= 1,
+                        "row {row} is not one discrete band: {colors:?}"
+                    );
+                    colors.into_iter().next()
+                })
+                .collect();
+            let expected: Vec<u32> = [
+                (0xd0fdd9ff, 4usize),
+                (0xa8fcbaff, 3),
+                (0x82fb9cff, 4),
+                (0x539e65ff, 3),
+                (0x2b5037ff, 5),
+            ]
+            .into_iter()
+            .flat_map(|(color, rows)| std::iter::repeat_n(color, rows))
+            .collect();
+            assert_eq!(colors_by_nonempty_row, expected);
+            return;
+        }
+    }
+    panic!("decrypt effect did not complete within the safety bound");
+}
+
+#[test]
+fn representative_effects_use_the_same_five_final_text_bands() {
+    let logo = include_str!("../../plymouth-ttfx-plugin/embedded-logo-v2.txt");
+    // print covers the ordinary final-gradient path; matrix and rain had
+    // separate paths that the audio-background implementation did not wire.
+    for effect in ["print", "matrix", "rain"] {
+        let mut engine = Engine::create(effect, 7, logo, 162, 20, 240).unwrap();
+        let mut completed = false;
+        for _ in 0..10_000 {
+            if engine.step().unwrap() != StepOutcome::Completed {
+                continue;
+            }
+            completed = true;
+            let (width, height) = engine.dimensions();
+            let logo_rows: Vec<Vec<char>> =
+                logo.lines().map(|line| line.chars().collect()).collect();
+            let colors_by_nonempty_row: Vec<u32> = (0..height)
+                .filter_map(|row| {
+                    let colors: std::collections::BTreeSet<u32> = engine.cells()
+                        [row * width..(row + 1) * width]
+                        .iter()
+                        .zip(&logo_rows[row])
+                        .filter(|(_, input)| **input != ' ')
+                        .map(|(cell, _)| cell.fg_rgba)
+                        .collect();
+                    if colors.is_empty() {
+                        return None;
+                    }
+                    assert_eq!(colors.len(), 1, "{effect} row {row} is not one solid band");
+                    colors.into_iter().next()
+                })
+                .collect();
+            let run_lengths = colors_by_nonempty_row
+                .chunk_by(|left, right| left == right)
+                .map(<[u32]>::len)
+                .collect::<Vec<_>>();
+            assert_eq!(run_lengths, [4, 3, 4, 3, 5], "{effect}");
+            break;
+        }
+        assert!(
+            completed,
+            "{effect} did not complete within the safety bound"
+        );
+    }
 }
 
 #[test]

@@ -69,7 +69,7 @@ stage_module() {
   inspect_module "$module"
   [[ $destdir == /* ]] || { printf 'destdir must be absolute\n' >&2; return 1; }
   mkdir -p -- "$destdir/usr/lib/plymouth"
-  install -m 0644 -- "$module" "$destdir/usr/lib/plymouth/ttfx-plymouth.so"
+  install -m 0755 -- "$module" "$destdir/usr/lib/plymouth/ttfx-plymouth.so"
 
   theme_source="$root/default/plymouth"
   theme_dest="$destdir/usr/share/plymouth/themes/omarchy"
@@ -102,12 +102,14 @@ build_module() {
   archive="$build_target_dir/plymouth/libttfx_plymouth.a"
   [[ -f $archive ]] || { printf 'Rust build did not produce %s\n' "$archive" >&2; return 1; }
 
-  flags=$(pkgconf --cflags ply-splash-core ply-splash-graphics)
-  for flags in $flags; do
-    if [[ $flags == -I* ]]; then
-      cflags+=( -isystem "${flags#-I}" )
+  # Plymouth headers are not -Wpedantic clean on every gcc; include them as
+  # system headers so -Werror only applies to our sources.
+  cflags=()
+  for flag in $(pkgconf --cflags ply-splash-core ply-splash-graphics); do
+    if [[ $flag == -I* ]]; then
+      cflags+=("-isystem" "${flag#-I}")
     else
-      cflags+=( "$flags" )
+      cflags+=("$flag")
     fi
   done
   flags=$(pkgconf --libs ply-splash-core ply-splash-graphics)
@@ -121,11 +123,8 @@ build_module() {
     "$plugin_root/plugin.c" "$plugin_root/state.c" "$archive" "${libs[@]}" \
     -ldl -lpthread -lm -o "$build_temporary"
   strip --strip-unneeded "$build_temporary"
-  # ldd requires execute permission on some architectures; inspect first, then
-  # publish the module with Plymouth's non-executable 0644 mode.
   chmod 0755 "$build_temporary"
   inspect_module "$build_temporary"
-  chmod 0644 "$build_temporary"
   mv -fT -- "$build_temporary" "$output"
   build_temporary=
   cleanup_build

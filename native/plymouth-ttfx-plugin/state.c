@@ -127,7 +127,8 @@ bool ttfx_handoff_publish(int directory, const ttfx_handoff_t *h)
         if (directory < 0)
                 return false;
         if (h == NULL || h->effect == NULL || h->phase.step > TTFX_HANDOFF_MAX_STEP ||
-            h->width != 162U || h->height != 20U || h->fps != 240U || h->speed != 1U ||
+            h->width != 162U || h->height != 20U || h->fps != 240U ||
+            h->speed != TTFX_PLAYBACK_STEPS_PER_TICK ||
             h->background > 0xffffffU || h->foreground > 0xffffffU)
                 goto fail;
         while (length < 128U && h->effect[length] != '\0') {
@@ -140,11 +141,13 @@ bool ttfx_handoff_publish(int directory, const ttfx_handoff_t *h)
         if (length == 0U || length == 128U)
                 goto fail;
         int size = snprintf(text, sizeof(text),
-                "version=1\neffect=%s\nseed=%" PRIu64 "\ncycle=%" PRIu64 "\nstep=%" PRIu64
+                "version=2\neffect=%s\nseed=%" PRIu64 "\ncycle=%" PRIu64 "\nstep=%" PRIu64
                 "\nwidth=%" PRIu32 "\nheight=%" PRIu32 "\nfps=%" PRIu32 "\nspeed=%" PRIu32
-                "\nbackground=%06" PRIx32 "\nforeground=%06" PRIx32 "\ninput=embedded-logo-v2\n",
+                "\nbackground=%06" PRIx32 "\nforeground=%06" PRIx32
+                "\ninput=embedded-logo-v2\nplayback=%s\n",
                 h->effect, h->seed, h->phase.cycle, h->phase.step,
-                h->width, h->height, h->fps, h->speed, h->background, h->foreground);
+                h->width, h->height, h->fps, h->speed, h->background, h->foreground,
+                h->hold_final ? "hold-final" : "continuous");
         if (size <= 0 || (size_t)size >= sizeof(text))
                 goto fail;
         /* Fixed-size tmpfs I/O only: no disk sync, wait, sleep or retry loops.
@@ -184,7 +187,9 @@ ttfx_state_t ttfx_state_initial(void)
 {
         ttfx_state_t state = {
                 .prompt_mode = TTFX_PROMPT_NONE,
-                .animation_enabled = true
+                .animation_enabled = true,
+                .playback_mode = TTFX_PLAYBACK_SUBMIT_TO_FINISH,
+                .playback_phase = TTFX_PLAYBACK_INPUT
         };
         return state;
 }
@@ -313,6 +318,44 @@ bool ttfx_state_set_password(ttfx_state_t *state, const char *prompt, int bullet
         state->prompt_mode = TTFX_PROMPT_PASSWORD;
         state->bullets = safe_bullets;
         return true;
+}
+
+bool ttfx_state_set_playback_mode(ttfx_state_t *state, const char *mode)
+{
+        if (mode == NULL || strcmp(mode, "submit-to-finish") == 0) {
+                state->playback_mode = TTFX_PLAYBACK_SUBMIT_TO_FINISH;
+                return true;
+        }
+        if (strcmp(mode, "continuous") == 0) {
+                state->playback_mode = TTFX_PLAYBACK_CONTINUOUS;
+                state->playback_phase = TTFX_PLAYBACK_INPUT;
+                return true;
+        }
+        return false;
+}
+
+unsigned int ttfx_state_engine_steps_per_tick(const ttfx_state_t *state)
+{
+        if (state->playback_mode == TTFX_PLAYBACK_CONTINUOUS ||
+            state->playback_phase == TTFX_PLAYBACK_INPUT)
+                return TTFX_PLAYBACK_STEPS_PER_TICK;
+        if (state->playback_phase == TTFX_PLAYBACK_FAST_FORWARD)
+                return TTFX_FAST_FORWARD_STEPS_PER_TICK;
+        return 0U;
+}
+
+void ttfx_state_confirm_success(ttfx_state_t *state)
+{
+        if (state->playback_mode == TTFX_PLAYBACK_SUBMIT_TO_FINISH &&
+            state->playback_phase == TTFX_PLAYBACK_INPUT)
+                state->playback_phase = TTFX_PLAYBACK_FAST_FORWARD;
+}
+
+void ttfx_state_engine_completed(ttfx_state_t *state)
+{
+        if (state->playback_mode == TTFX_PLAYBACK_SUBMIT_TO_FINISH &&
+            state->playback_phase != TTFX_PLAYBACK_FINAL)
+                state->playback_phase = TTFX_PLAYBACK_FINAL;
 }
 
 bool ttfx_state_password_pending(const ttfx_state_t *state)

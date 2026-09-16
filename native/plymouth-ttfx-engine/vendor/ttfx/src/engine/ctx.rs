@@ -122,6 +122,9 @@ pub struct EngineCtx {
     pub active_characters: ActiveCharacters,
     active_character_scratch: Vec<CharId>,
     pub preexisting_colors_present: bool,
+    /// Embedding-only final text layout. Ordinary CLI and transient gradients
+    /// retain their authored directions and smooth spectra by default.
+    pub final_text_bands: bool,
     /// When Some, every event emission appends a trace line (test harness).
     pub event_log: Option<Vec<String>>,
     structured_output: bool,
@@ -146,6 +149,7 @@ impl EngineCtx {
             active_characters: ActiveCharacters::new(),
             active_character_scratch: Vec::new(),
             preexisting_colors_present,
+            final_text_bands: false,
             event_log: None,
             structured_output: false,
         })
@@ -154,6 +158,31 @@ impl EngineCtx {
     /// Select cell-only frame generation for in-process renderers.
     pub fn set_structured_output(&mut self, enabled: bool) {
         self.structured_output = enabled;
+    }
+
+    /// Map only an effect's final text palette, never its transient scene colors.
+    pub fn final_gradient_mapping(
+        &self,
+        gradient: &crate::utils::graphics::Gradient,
+        direction: crate::utils::graphics::GradientDirection,
+    ) -> Result<crate::utils::graphics::CoordColorMap, String> {
+        let canvas = &self.terminal.canvas;
+        if self.final_text_bands {
+            gradient.build_banded_coordinate_color_mapping(
+                canvas.text_bottom,
+                canvas.text_top,
+                canvas.text_left,
+                canvas.text_right,
+            )
+        } else {
+            gradient.build_coordinate_color_mapping(
+                canvas.text_bottom,
+                canvas.text_top,
+                canvas.text_left,
+                canvas.text_right,
+                direction,
+            )
+        }
     }
 
     // ------------------------------------------------------------------

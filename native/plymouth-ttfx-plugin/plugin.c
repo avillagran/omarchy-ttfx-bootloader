@@ -22,7 +22,8 @@
 #include "ttfx_plymouth.h"
 
 #define FRAME_INTERVAL_SECONDS (1.0 / 240.0)
-#define ENGINE_STEPS_PER_TICK 1U
+#define ENGINE_STEPS_PER_TICK 2U
+#define FINAL_DRAW_WAIT_NS UINT64_C(250000000)
 #define BACKGROUND_COLOR 0x0b0d10U
 #define LOGO_COLOR 0xf4f4f5U
 #define PROMPT_LABEL_COLOR 0xf4f4f5ffU
@@ -80,8 +81,6 @@ struct _ply_boot_splash_plugin {
         bool lock_scale_attempted;
         bool progress_assets_attempted;
         bool progress_visible;
-        bool progress_ever_shown;
-        bool hold_final_frame;
         bool boot_progress_allowed;
         double progress_fraction;
         uint64_t progress_started_ns;
@@ -99,6 +98,8 @@ struct _ply_boot_splash_plugin {
         TtfxCell drawn_cells[ENGINE_WIDTH * ENGINE_HEIGHT];
         bool timeout_scheduled;
         bool static_degraded;
+        bool success_pending;
+        uint64_t success_started_ns;
 
         uint64_t (*clock_ns)(void);
         ply_trigger_t *idle_trigger;
@@ -181,8 +182,6 @@ static void start_progress(ply_boot_splash_plugin_t *plugin)
         if (!plugin->boot_progress_allowed || !ensure_progress_assets(plugin))
                 return;
         plugin->progress_visible = true;
-        plugin->progress_ever_shown = true;
-        plugin->hold_final_frame = false;
         plugin->progress_fraction = 0.0;
         plugin->progress_started_ns = plugin->clock_ns != NULL ? plugin->clock_ns() : 0U;
 }
@@ -193,8 +192,6 @@ static void resume_progress(ply_boot_splash_plugin_t *plugin)
             !plugin->boot_progress_allowed || !ensure_progress_assets(plugin))
                 return;
         plugin->progress_visible = true;
-        plugin->progress_ever_shown = true;
-        plugin->hold_final_frame = false;
         if (plugin->progress_started_ns == 0U)
                 plugin->progress_started_ns = plugin->clock_ns != NULL ? plugin->clock_ns() : 0U;
 }
@@ -309,9 +306,11 @@ static void damage_all_views(ply_boot_splash_plugin_t *plugin)
 
 static void schedule_timeout_if_needed(ply_boot_splash_plugin_t *plugin)
 {
-        bool animation_active = plugin->state.animation_enabled && !plugin->static_degraded;
+        bool animation_active = plugin->state.animation_enabled && !plugin->static_degraded &&
+                                ttfx_state_engine_steps_per_tick(&plugin->state) > 0U;
         bool transition_active = ttfx_state_password_pending(&plugin->state) ||
-                                 ttfx_state_reaction_active(&plugin->state);
+                                 ttfx_state_reaction_active(&plugin->state) ||
+                                 plugin->success_pending;
 
         if (!plugin->visible || plugin->loop == NULL || plugin->idle ||
             plugin->timeout_scheduled || (!animation_active && !transition_active))
@@ -778,8 +777,7 @@ static void on_draw(void *user_data,
                 if (covers_grid && plugin->visible && plugin->state.animation_enabled &&
                     plugin->cells != NULL && plugin->canvas_width == ENGINE_WIDTH &&
                     plugin->canvas_height == ENGINE_HEIGHT) {
-                        if (plugin->cells != plugin->drawn_cells)
-                                memcpy(plugin->drawn_cells, plugin->cells, sizeof(plugin->drawn_cells));
+                        memcpy(plugin->drawn_cells, plugin->cells, sizeof(plugin->drawn_cells));
                         plugin->drawn_phase = plugin->phase;
                         plugin->drawn_valid = true;
                 }
@@ -811,17 +809,33 @@ static void on_draw(void *user_data,
 static void on_timeout(void *user_data, ply_event_loop_t *loop)
 {
         ply_boot_splash_plugin_t *plugin = user_data;
-        uint8_t looped = 0U;
+        uint8_t completed = 0U;
         bool password_was_pending;
-        bool animation_active;
+        unsigned int engine_steps;
 
         (void)loop;
         plugin->timeout_scheduled = false;
         if (!plugin->visible || plugin->loop == NULL || plugin->idle)
                 return;
 
+        if (plugin->success_pending && plugin->state.playback_phase == TTFX_PLAYBACK_FINAL) {
+                uint64_t now_ns = plugin->clock_ns();
+                bool terminal_drawn = plugin->drawn_valid &&
+                                      plugin->drawn_phase.step == plugin->phase.step &&
+                                      plugin->drawn_phase.cycle == plugin->phase.cycle;
+                bool wait_expired = plugin->success_started_ns != 0U &&
+                                    now_ns >= plugin->success_started_ns &&
+                                    now_ns - plugin->success_started_ns >= FINAL_DRAW_WAIT_NS;
+                if (terminal_drawn || wait_expired) {
+                        finish_become_idle(plugin);
+                        return;
+                }
+        }
+
         password_was_pending = ttfx_state_password_pending(&plugin->state);
-        animation_active = plugin->state.animation_enabled && !plugin->static_degraded;
+        engine_steps = plugin->state.animation_enabled && !plugin->static_degraded
+                               ? ttfx_state_engine_steps_per_tick(&plugin->state)
+                               : 0U;
         if (plugin->progress_visible && password_was_pending)
                 plugin->state.failure_candidate_tick = 0U;
         ttfx_state_tick(&plugin->state);
@@ -839,43 +853,37 @@ static void on_timeout(void *user_data, ply_event_loop_t *loop)
         }
         for (view_t *view = plugin->views; view != NULL; view = view->next)
                 sync_password_entry_reaction_position(view);
-        if (animation_active && !plugin->hold_final_frame) {
-                for (unsigned int step = 0U; step < ENGINE_STEPS_PER_TICK; step++) {
-                        clear_snapshot(plugin);
-                        if (ttfx_engine_step(plugin->engine, &looped) != TTFX_STATUS_OK ||
-                            !update_snapshot(plugin)) {
-                                free_engine(plugin);
-                                ttfx_state_disable_animation(&plugin->state);
-                                plugin->static_degraded = true;
-                                damage_all_views(plugin);
-                                schedule_timeout_if_needed(plugin);
-                                return;
-                        }
-                        if (looped) {
-                                if (!plugin->progress_visible && plugin->progress_ever_shown) {
-                                        /* The progress bar is hidden (input
-                                         * phase or boot finished): do not
-                                         * restart the effect. Hold the final
-                                         * gradient-logo frame instead. The
-                                         * just-looped snapshot already points
-                                         * at frame 0, so repoint the cells at
-                                         * the last fully painted frame. */
-                                        plugin->hold_final_frame = true;
-                                        if (plugin->drawn_valid) {
-                                                plugin->cells = plugin->drawn_cells;
-                                                plugin->cell_count = (size_t)ENGINE_WIDTH * (size_t)ENGINE_HEIGHT;
-                                                plugin->canvas_width = ENGINE_WIDTH;
-                                                plugin->canvas_height = ENGINE_HEIGHT;
-                                        }
-                                        break;
+        for (unsigned int step = 0U; step < engine_steps; step++) {
+                clear_snapshot(plugin);
+                if (ttfx_engine_step(plugin->engine, &completed) != TTFX_STATUS_OK ||
+                    !update_snapshot(plugin)) {
+                        free_engine(plugin);
+                        ttfx_state_disable_animation(&plugin->state);
+                        plugin->static_degraded = true;
+                        damage_all_views(plugin);
+                        schedule_timeout_if_needed(plugin);
+                        return;
+                }
+                if (completed) {
+                        ttfx_state_engine_completed(&plugin->state);
+                        if (plugin->state.playback_phase == TTFX_PLAYBACK_INPUT) {
+                                if (ttfx_engine_reset(plugin->engine) != TTFX_STATUS_OK ||
+                                    !update_snapshot(plugin)) {
+                                        free_engine(plugin);
+                                        ttfx_state_disable_animation(&plugin->state);
+                                        plugin->static_degraded = true;
+                                        damage_all_views(plugin);
+                                        schedule_timeout_if_needed(plugin);
+                                        return;
                                 }
                                 plugin->phase.step = 0U;
                                 if (plugin->phase.cycle != UINT64_MAX)
                                         plugin->phase.cycle++;
-                        } else if (plugin->phase.step != UINT64_MAX) {
-                                plugin->phase.step++;
                         }
+                        break;
                 }
+                if (plugin->phase.step != UINT64_MAX)
+                        plugin->phase.step++;
         }
         damage_all_views(plugin);
         schedule_timeout_if_needed(plugin);
@@ -909,6 +917,8 @@ static void finish_become_idle(ply_boot_splash_plugin_t *plugin)
         ply_trigger_t *idle_trigger = plugin->idle_trigger;
 
         plugin->idle_trigger = NULL;
+        plugin->success_pending = false;
+        plugin->success_started_ns = 0U;
         stop_progress(plugin);
         plugin->idle = true;
         stop_animation(plugin);
@@ -918,6 +928,7 @@ static void finish_become_idle(ply_boot_splash_plugin_t *plugin)
                         hide_view_prompt(view);
                 damage_all_views(plugin);
         }
+        publish_frame_to_fbcon(plugin);
         if (plugin->drawn_valid && plugin->state.animation_enabled && !plugin->static_degraded) {
                 plugin->cells = plugin->drawn_cells;
                 plugin->cell_count = ENGINE_WIDTH * ENGINE_HEIGHT;
@@ -928,7 +939,8 @@ static void finish_become_idle(ply_boot_splash_plugin_t *plugin)
                         .phase = plugin->drawn_phase,
                         .width = ENGINE_WIDTH, .height = ENGINE_HEIGHT,
                         .fps = ENGINE_FPS, .speed = ENGINE_STEPS_PER_TICK,
-                        .background = plugin->background_color, .foreground = plugin->text_color
+                        .background = plugin->background_color, .foreground = plugin->text_color,
+                        .hold_final = plugin->state.playback_mode == TTFX_PLAYBACK_SUBMIT_TO_FINISH
                 };
                 plugin->handoff_published = ttfx_handoff_publish(plugin->handoff_directory, &handoff);
         } else {
@@ -956,8 +968,22 @@ static void become_idle(ply_boot_splash_plugin_t *plugin, ply_trigger_t *idle_tr
                 return;
         }
         stop_progress(plugin);
-        publish_frame_to_fbcon(plugin);
         plugin->idle_trigger = idle_trigger;
+        if (plugin->state.playback_mode == TTFX_PLAYBACK_SUBMIT_TO_FINISH &&
+            plugin->state.animation_enabled && !plugin->static_degraded &&
+            (plugin->state.playback_phase != TTFX_PLAYBACK_FINAL || !plugin->drawn_valid ||
+             plugin->drawn_phase.step != plugin->phase.step ||
+             plugin->drawn_phase.cycle != plugin->phase.cycle)) {
+                plugin->success_pending = true;
+                plugin->success_started_ns = plugin->clock_ns();
+                ttfx_state_confirm_success(&plugin->state);
+                ttfx_state_clear_prompt(&plugin->state);
+                for (view_t *view = plugin->views; view != NULL; view = view->next)
+                        hide_view_prompt(view);
+                damage_all_views(plugin);
+                schedule_timeout_if_needed(plugin);
+                return;
+        }
         finish_become_idle(plugin);
 }
 
@@ -1288,6 +1314,7 @@ static ply_boot_splash_plugin_t *create_plugin(ply_key_file_t *key_file)
         char *configured_background = NULL;
         char *configured_text = NULL;
         char *configured_message = NULL;
+        char *configured_playback = NULL;
         bool animation_enabled = true;
         bool native_config_valid = true;
         uint64_t configured_seed_value = 0U;
@@ -1308,6 +1335,7 @@ static ply_boot_splash_plugin_t *create_plugin(ply_key_file_t *key_file)
                 configured_background = ply_key_file_get_value(key_file, "ttfx", "BackgroundColor");
                 configured_text = ply_key_file_get_value(key_file, "ttfx", "TextColor");
                 configured_message = ply_key_file_get_value(key_file, "ttfx", "MessageColor");
+                configured_playback = ply_key_file_get_value(key_file, "ttfx", "PlaybackMode");
                 native_config_valid = parse_enabled(configured_enabled, &animation_enabled);
                 if (native_config_valid && strcmp(configured_mode != NULL ? configured_mode : "", "off") == 0) {
                         native_config_valid = !animation_enabled && configured_effect != NULL &&
@@ -1349,6 +1377,7 @@ static ply_boot_splash_plugin_t *create_plugin(ply_key_file_t *key_file)
                 plugin->image_dir = copy_string("/usr/share/plymouth/themes/spinner");
         }
         if (plugin->image_dir == NULL || plugin->effect == NULL) {
+                free(configured_playback);
                 free(plugin->effect);
                 free(plugin->image_dir);
                 free(plugin);
@@ -1356,6 +1385,9 @@ static ply_boot_splash_plugin_t *create_plugin(ply_key_file_t *key_file)
         }
         plugin->lock_image = load_theme_image(plugin->image_dir, "lock.png");
         plugin->state = ttfx_state_initial();
+        if (!ttfx_state_set_playback_mode(&plugin->state, configured_playback))
+                animation_enabled = false;
+        free(configured_playback);
         if (!animation_enabled)
                 ttfx_state_disable_animation(&plugin->state);
         plugin->loop_state = ttfx_loop_state_initial();
@@ -1592,12 +1624,27 @@ static void display_password(ply_boot_splash_plugin_t *plugin,
                              const char *prompt,
                              int bullets)
 {
+        bool reaction_was_active = ttfx_state_reaction_active(&plugin->state);
+
         stop_progress(plugin);
         ttfx_raw_clear(plugin->handoff_directory);
         if (!ttfx_state_set_password(&plugin->state, prompt, bullets)) {
                 ttfx_state_disable_animation(&plugin->state);
                 enter_degraded_static_mode(plugin);
                 return;
+        }
+        if (!reaction_was_active && ttfx_state_reaction_active(&plugin->state) &&
+            plugin->engine != NULL &&
+            plugin->state.playback_mode == TTFX_PLAYBACK_CONTINUOUS) {
+                clear_snapshot(plugin);
+                if (ttfx_engine_reset(plugin->engine) != TTFX_STATUS_OK ||
+                    !update_snapshot(plugin)) {
+                        free_engine(plugin);
+                        ttfx_state_disable_animation(&plugin->state);
+                        plugin->static_degraded = true;
+                } else {
+                        plugin->phase = (ttfx_phase_t){0};
+                }
         }
         for (view_t *view = plugin->views; view != NULL; view = view->next) {
                 if (view->entry_loaded) {
