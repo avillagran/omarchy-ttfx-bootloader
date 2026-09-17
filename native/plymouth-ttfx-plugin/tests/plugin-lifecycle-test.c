@@ -372,6 +372,9 @@ ply_image_t *ply_image_resize(ply_image_t *image, long width, long height)
         resized->height = height;
         resized->buffer.width = (unsigned long)width;
         resized->buffer.height = (unsigned long)height;
+        resized->buffer.pixels = calloc((unsigned long)(width * height),
+                                        sizeof(*resized->buffer.pixels));
+        assert(resized->buffer.pixels != NULL);
         resized_image_width = width;
         resized_image_height = height;
         image_allocations++;
@@ -912,6 +915,10 @@ static void test_wrong_password_composites_horizontal_red_reaction_without_engin
                 capture_geometry = false;
                 /* wrong answer: the padlock itself turns red */
                 assert(last_fill_source == plugin->lock_buffer_error);
+                /* the red padlock keeps the normal scaled size: it only
+                 * tints, the shake comes from the entry's reaction offset */
+                assert(plugin->lock_buffer_error->width == (unsigned long)resized_image_width);
+                assert(plugin->lock_buffer_error->height == (unsigned long)resized_image_height);
                 assert(captured_count == 8U);
                 assert(captured_rects[1].x ==
                        (long)plugin->views->geometry.grid_x + expected_offset);

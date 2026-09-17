@@ -1181,6 +1181,10 @@ static bool scale_lock_for_entry(ply_boot_splash_plugin_t *plugin, long entry_he
             source_height <= 0L || source_height > LOCK_MAX_DIMENSION) {
                 ply_image_free(source);
                 plugin->lock_image = NULL;
+                if (plugin->lock_buffer_error != NULL) {
+                        ply_pixel_buffer_free(plugin->lock_buffer_error);
+                        plugin->lock_buffer_error = NULL;
+                }
                 return false;
         }
         target_height = (entry_height * 4L + 2L) / 5L;
@@ -1189,11 +1193,24 @@ static bool scale_lock_for_entry(ply_boot_splash_plugin_t *plugin, long entry_he
         if (target_width <= 0L || target_height <= 0L) {
                 ply_image_free(source);
                 plugin->lock_image = NULL;
+                if (plugin->lock_buffer_error != NULL) {
+                        ply_pixel_buffer_free(plugin->lock_buffer_error);
+                        plugin->lock_buffer_error = NULL;
+                }
                 return false;
         }
         scaled = ply_image_resize(source, target_width, target_height);
         ply_image_free(source);
         plugin->lock_image = scaled;
+        /* The tinted error copy must come from the SCALED image: building it
+         * from the original would draw the padlock bigger on a wrong answer.
+         * It only tints; the shake comes from the entry's reaction offset. */
+        if (plugin->lock_buffer_error != NULL) {
+                ply_pixel_buffer_free(plugin->lock_buffer_error);
+                plugin->lock_buffer_error = NULL;
+        }
+        if (scaled != NULL)
+                plugin->lock_buffer_error = build_error_lock_buffer(scaled);
         return scaled != NULL;
 }
 
@@ -1442,7 +1459,6 @@ static ply_boot_splash_plugin_t *create_plugin(ply_key_file_t *key_file)
                 return NULL;
         }
         plugin->lock_image = load_theme_image(plugin->image_dir, "lock.png");
-        plugin->lock_buffer_error = build_error_lock_buffer(plugin->lock_image);
         plugin->state = ttfx_state_initial();
         if (!ttfx_state_set_playback_mode(&plugin->state, configured_playback))
                 animation_enabled = false;
