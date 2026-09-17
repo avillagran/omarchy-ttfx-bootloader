@@ -75,6 +75,7 @@ struct _ply_boot_splash_plugin {
         char *image_dir;
         char *effect;
         ply_image_t *lock_image;
+        ply_pixel_buffer_t *lock_buffer_error;
 
         ply_image_t *progress_box_image;
         ply_image_t *progress_bar_image;
@@ -579,6 +580,46 @@ static void sync_password_entry_reaction_position(view_t *view)
         view->entry_reaction_x_offset = target_offset;
 }
 
+/* Red-tinted copy of the lock image used while the wrong-answer reaction is
+ * active, so the padlock also signals the failure instead of only the entry
+ * outline and animation row. */
+static ply_pixel_buffer_t *build_error_lock_buffer(ply_image_t *image)
+{
+        if (image == NULL)
+                return NULL;
+        ply_pixel_buffer_t *source = ply_image_get_buffer(image);
+        unsigned long width = ply_pixel_buffer_get_width(source);
+        unsigned long height = ply_pixel_buffer_get_height(source);
+        ply_pixel_buffer_t *tinted = ply_pixel_buffer_new(width, height);
+        if (tinted == NULL)
+                return NULL;
+        uint32_t *src = ply_pixel_buffer_get_argb32_data(source);
+        uint32_t *dst = ply_pixel_buffer_get_argb32_data(tinted);
+        if (src == NULL || dst == NULL) {
+                ply_pixel_buffer_free(tinted);
+                return NULL;
+        }
+        const uint32_t tr = (ERROR_GLITCH_COLOR >> 16) & 0xffU;
+        const uint32_t tg = (ERROR_GLITCH_COLOR >> 8) & 0xffU;
+        const uint32_t tb = ERROR_GLITCH_COLOR & 0xffU;
+        for (unsigned long i = 0UL; i < width * height; i++) {
+                uint32_t px = src[i];
+                uint32_t a = px >> 24;
+                if (a == 0U) {
+                        dst[i] = 0U;
+                        continue;
+                }
+                uint32_t r = (px >> 16) & 0xffU;
+                uint32_t g = (px >> 8) & 0xffU;
+                uint32_t b = px & 0xffU;
+                r = (r * 30U + tr * 70U) / 100U;
+                g = (g * 30U + tg * 70U) / 100U;
+                b = (b * 30U + tb * 70U) / 100U;
+                dst[i] = (a << 24) | (r << 16) | (g << 8) | b;
+        }
+        return tinted;
+}
+
 static bool draw_lock_image(view_t *view, ply_pixel_buffer_t *buffer)
 {
         ply_image_t *image = view->plugin->lock_image;
@@ -590,12 +631,16 @@ static bool draw_lock_image(view_t *view, ply_pixel_buffer_t *buffer)
 
         if (image == NULL)
                 return false;
+        ply_pixel_buffer_t *source = ply_image_get_buffer(image);
+        if (ttfx_state_reaction_active(&view->plugin->state) &&
+            view->plugin->lock_buffer_error != NULL)
+                source = view->plugin->lock_buffer_error;
         get_entry_position(view, &entry_x, &entry_y);
         entry_height = ply_entry_get_height(view->entry);
         lock_width = ply_image_get_width(image);
         lock_height = ply_image_get_height(image);
         ply_pixel_buffer_fill_with_buffer(buffer,
-                                          ply_image_get_buffer(image),
+                                          source,
                                           (int)(entry_x - lock_width - LOCK_GAP +
                                                 ttfx_state_reaction_x_offset(&view->plugin->state)),
                                           (int)(entry_y + (entry_height - lock_height) / 2L));
@@ -809,7 +854,6 @@ static void on_draw(void *user_data,
 static void on_timeout(void *user_data, ply_event_loop_t *loop)
 {
         ply_boot_splash_plugin_t *plugin = user_data;
-        uint8_t completed = 0U;
         bool password_was_pending;
         unsigned int engine_steps;
 
@@ -854,8 +898,19 @@ static void on_timeout(void *user_data, ply_event_loop_t *loop)
         for (view_t *view = plugin->views; view != NULL; view = view->next)
                 sync_password_entry_reaction_position(view);
         for (unsigned int step = 0U; step < engine_steps; step++) {
+                uint8_t looped = 0U;
+                uint8_t finished = 0U;
+                /* The logo is drawn through the engine's single entry point:
+                 * LOOP while waiting for input (both playback modes keep the
+                 * animation rotating during password entry), ONE_TIME while
+                 * accelerating to the end and once the final frame is held. */
+                uint32_t mode = plugin->state.playback_phase == TTFX_PLAYBACK_INPUT
+                                        ? TTFX_LOGO_MODE_LOOP
+                                        : TTFX_LOGO_MODE_ONE_TIME;
+
                 clear_snapshot(plugin);
-                if (ttfx_engine_step(plugin->engine, &completed) != TTFX_STATUS_OK ||
+                if (ttfx_engine_draw_logo(plugin->engine, mode, &looped,
+                                          &finished) != TTFX_STATUS_OK ||
                     !update_snapshot(plugin)) {
                         free_engine(plugin);
                         ttfx_state_disable_animation(&plugin->state);
@@ -864,22 +919,17 @@ static void on_timeout(void *user_data, ply_event_loop_t *loop)
                         schedule_timeout_if_needed(plugin);
                         return;
                 }
-                if (completed) {
+                if (looped) {
+                        /* LOOP restarted the tape this call. */
+                        plugin->phase.step = 0U;
+                        if (plugin->phase.cycle != UINT64_MAX)
+                                plugin->phase.cycle++;
+                        break;
+                }
+                if (finished) {
+                        /* ONE_TIME completed: the engine now holds the final
+                         * frame on every later call. */
                         ttfx_state_engine_completed(&plugin->state);
-                        if (plugin->state.playback_phase == TTFX_PLAYBACK_INPUT) {
-                                if (ttfx_engine_reset(plugin->engine) != TTFX_STATUS_OK ||
-                                    !update_snapshot(plugin)) {
-                                        free_engine(plugin);
-                                        ttfx_state_disable_animation(&plugin->state);
-                                        plugin->static_degraded = true;
-                                        damage_all_views(plugin);
-                                        schedule_timeout_if_needed(plugin);
-                                        return;
-                                }
-                                plugin->phase.step = 0U;
-                                if (plugin->phase.cycle != UINT64_MAX)
-                                        plugin->phase.cycle++;
-                        }
                         break;
                 }
                 if (plugin->phase.step != UINT64_MAX)
@@ -912,22 +962,11 @@ static void stop_animation(ply_boot_splash_plugin_t *plugin)
         }
 }
 
-static void finish_become_idle(ply_boot_splash_plugin_t *plugin)
+/* Publishes the fbcon frame plus the desktop bridge handoff (state + raw).
+ * Must run before the splash goes away, regardless of whether the daemon
+ * idles the plugin or deactivates/hides it. */
+static void publish_handoff(ply_boot_splash_plugin_t *plugin)
 {
-        ply_trigger_t *idle_trigger = plugin->idle_trigger;
-
-        plugin->idle_trigger = NULL;
-        plugin->success_pending = false;
-        plugin->success_started_ns = 0U;
-        stop_progress(plugin);
-        plugin->idle = true;
-        stop_animation(plugin);
-        if (plugin->state.prompt_mode != TTFX_PROMPT_NONE) {
-                ttfx_state_clear_prompt(&plugin->state);
-                for (view_t *view = plugin->views; view != NULL; view = view->next)
-                        hide_view_prompt(view);
-                damage_all_views(plugin);
-        }
         publish_frame_to_fbcon(plugin);
         if (plugin->drawn_valid && plugin->state.animation_enabled && !plugin->static_degraded) {
                 plugin->cells = plugin->drawn_cells;
@@ -956,6 +995,25 @@ static void finish_become_idle(ply_boot_splash_plugin_t *plugin)
             view->raw_phase.cycle == plugin->drawn_phase.cycle)
                 (void)ttfx_raw_publish(plugin->handoff_directory, view->raw_pixels,
                                        view->raw_width, view->raw_height, view->raw_captured_ns);
+}
+
+static void finish_become_idle(ply_boot_splash_plugin_t *plugin)
+{
+        ply_trigger_t *idle_trigger = plugin->idle_trigger;
+
+        plugin->idle_trigger = NULL;
+        plugin->success_pending = false;
+        plugin->success_started_ns = 0U;
+        stop_progress(plugin);
+        plugin->idle = true;
+        stop_animation(plugin);
+        if (plugin->state.prompt_mode != TTFX_PROMPT_NONE) {
+                ttfx_state_clear_prompt(&plugin->state);
+                for (view_t *view = plugin->views; view != NULL; view = view->next)
+                        hide_view_prompt(view);
+                damage_all_views(plugin);
+        }
+        publish_handoff(plugin);
         /* Trigger can synchronously destroy the plugin: access nothing after pull. */
         if (idle_trigger != NULL)
                 ply_trigger_pull(idle_trigger, NULL);
@@ -1384,6 +1442,7 @@ static ply_boot_splash_plugin_t *create_plugin(ply_key_file_t *key_file)
                 return NULL;
         }
         plugin->lock_image = load_theme_image(plugin->image_dir, "lock.png");
+        plugin->lock_buffer_error = build_error_lock_buffer(plugin->lock_image);
         plugin->state = ttfx_state_initial();
         if (!ttfx_state_set_playback_mode(&plugin->state, configured_playback))
                 animation_enabled = false;
@@ -1475,6 +1534,8 @@ static void destroy_plugin(ply_boot_splash_plugin_t *plugin)
         ttfx_state_destroy(&plugin->state);
         if (plugin->lock_image != NULL)
                 ply_image_free(plugin->lock_image);
+        if (plugin->lock_buffer_error != NULL)
+                ply_pixel_buffer_free(plugin->lock_buffer_error);
 
         if (plugin->progress_box_image != NULL)
                 ply_image_free(plugin->progress_box_image);
@@ -1595,6 +1656,11 @@ static void on_boot_progress(ply_boot_splash_plugin_t *plugin,
 static void hide_splash_screen(ply_boot_splash_plugin_t *plugin,
                                ply_event_loop_t *loop)
 {
+        /* `plymouth deactivate` (issued by plymouth-quit) hides the splash
+         * instead of idling it; without publishing here the desktop bridge
+         * can read a stale handoff phase and restart from the first frame. */
+        if (!plugin->handoff_published)
+                publish_handoff(plugin);
         for (view_t *view = plugin->views; view != NULL; view = view->next) {
                 hide_view_prompt(view);
                 hide_view_message(view);

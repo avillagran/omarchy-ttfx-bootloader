@@ -32,6 +32,23 @@ ply_pixel_buffer_rotation_t ply_pixel_buffer_get_device_rotation(ply_pixel_buffe
 unsigned long ply_pixel_buffer_get_width(ply_pixel_buffer_t *b) { return b->width; }
 unsigned long ply_pixel_buffer_get_height(ply_pixel_buffer_t *b) { return b->height; }
 uint32_t *ply_pixel_buffer_get_argb32_data(ply_pixel_buffer_t *b) { return b->pixels; }
+ply_pixel_buffer_t *ply_pixel_buffer_new(unsigned long width, unsigned long height)
+{
+        ply_pixel_buffer_t *buffer = calloc(1U, sizeof(*buffer));
+        assert(buffer != NULL);
+        buffer->width = width;
+        buffer->height = height;
+        buffer->pixels = calloc(width * height, sizeof(*buffer->pixels));
+        assert(buffer->pixels != NULL);
+        return buffer;
+}
+void ply_pixel_buffer_free(ply_pixel_buffer_t *buffer)
+{
+        if (buffer == NULL)
+                return;
+        free(buffer->pixels);
+        free(buffer);
+}
 struct ply_entry { int unused; };
 struct ply_label { bool backend_loaded; unsigned int id; char text[128]; };
 struct _ply_image { long width, height; ply_pixel_buffer_t buffer; };
@@ -88,6 +105,7 @@ static double success_green_opacity;
 static long resized_image_width;
 static long resized_image_height;
 static int image_composite_x;
+static ply_pixel_buffer_t *last_fill_source;
 static int image_composite_y;
 static bool mock_image_load_success;
 static unsigned int logo_color_fills;
@@ -279,6 +297,7 @@ void ply_pixel_buffer_fill_with_buffer(ply_pixel_buffer_t *canvas,
 {
         (void)canvas;
         assert(source != NULL);
+        last_fill_source = source;
         image_composites++;
         image_composite_x = x;
         image_composite_y = y;
@@ -320,6 +339,9 @@ ply_image_t *ply_image_new(const char *filename)
         }
         image->buffer.width = (unsigned long)image->width;
         image->buffer.height = (unsigned long)image->height;
+        image->buffer.pixels = calloc((unsigned long)(image->width * image->height),
+                                      sizeof(*image->buffer.pixels));
+        assert(image->buffer.pixels != NULL);
         image_allocations++;
         return image;
 }
@@ -327,6 +349,7 @@ ply_image_t *ply_image_new(const char *filename)
 void ply_image_free(ply_image_t *image)
 {
         image_frees++;
+        free(image->buffer.pixels);
         free(image);
 }
 
@@ -510,6 +533,30 @@ int32_t ttfx_engine_reset(TtfxEngine *engine)
 {
         assert(engine == &mock_engine);
         engine_resets++;
+        return TTFX_STATUS_OK;
+}
+
+int32_t ttfx_engine_draw_logo(TtfxEngine *engine, uint32_t mode,
+                              uint8_t *out_looped, uint8_t *out_finished)
+{
+        assert(engine == &mock_engine);
+        engine_steps++;
+        if (mock_fail_on_step == engine_steps)
+                return TTFX_STATUS_ENGINE_ERROR;
+        if (mock_step_status != TTFX_STATUS_OK)
+                return mock_step_status;
+        if (out_looped != NULL)
+                *out_looped = 0U;
+        if (out_finished != NULL)
+                *out_finished = 0U;
+        if (engine_steps == mock_loop_on_step) {
+                if (mode == TTFX_LOGO_MODE_LOOP) {
+                        if (out_looped != NULL)
+                                *out_looped = 1U;
+                } else if (out_finished != NULL) {
+                        *out_finished = 1U;
+                }
+        }
         return TTFX_STATUS_OK;
 }
 void ttfx_engine_free(TtfxEngine *engine) { assert(engine == &mock_engine); engine_frees++; }
@@ -863,6 +910,8 @@ static void test_wrong_password_composites_horizontal_red_reaction_without_engin
                 capture_geometry = true;
                 display.draw_handler(display.draw_data, &buffer, 0, 0, 1280, 720, &display);
                 capture_geometry = false;
+                /* wrong answer: the padlock itself turns red */
+                assert(last_fill_source == plugin->lock_buffer_error);
                 assert(captured_count == 8U);
                 assert(captured_rects[1].x ==
                        (long)plugin->views->geometry.grid_x + expected_offset);

@@ -1152,6 +1152,19 @@ fn boot_phase_parser_matches_native_contract() {
 // Bounded boot adapter over the existing TTFX engine, not ANSI parsing or font
 // stretching. Its parameters match Plymouth's embedding; the ordinary desktop
 // backend and all of its audio/theme/config behavior remain separate.
+
+/// Playback mode for [`BootScene::step`], mirroring the Plymouth engine's
+/// `TTFX_LOGO_MODE_*` contract: the logo is drawn through this single entry
+/// point and every caller keeps its playback state through it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum LogoMode {
+    /// Plays the animation endlessly, restarting at the tape boundary.
+    Loop,
+    /// Plays the animation exactly once; once finished it holds the final
+    /// frame and ignores later calls.
+    OneTime,
+}
+
 struct BootScene {
     effect_name: String,
     seed: u64,
@@ -1227,18 +1240,24 @@ impl BootScene {
     fn for_handoff(handoff: &BootHandoff) -> Result<Self> {
         let start = std::time::Instant::now();
         let mut scene = Self::new(&handoff.effect, handoff.seed, handoff.scene_settings)?;
+        let mut replayed = false;
         if let Some(phase) = handoff.phase {
-            match scene.replay(phase, start + Duration::from_millis(750)) {
-                Ok(()) => log_dbg(&format!("boot phase accepted effect={} seed={} cycle={} step={} width=162 height=20 fps=240 speed=2 background={:06x} foreground={:06x} input=embedded-logo-v2 replay_ms={}",
+            // Boot starts are CPU-loaded; the 750 ms budget is exhausted on
+            // slower machines and the fallback must never freeze on frame 1.
+            match scene.replay(phase, start + Duration::from_millis(3000)) {
+                Ok(()) => {
+                    log_dbg(&format!("boot phase accepted effect={} seed={} cycle={} step={} width=162 height=20 fps=240 speed=2 background={:06x} foreground={:06x} input=embedded-logo-v2 replay_ms={}",
                     handoff.effect, handoff.seed, phase.cycle, phase.step, handoff.scene_settings.background,
-                    handoff.scene_settings.text, start.elapsed().as_millis())),
+                    handoff.scene_settings.text, start.elapsed().as_millis()));
+                    replayed = true;
+                }
                 Err(error) => {
                     log_dbg(&format!("boot phase fallback: {error}; restarting initial frame"));
                     scene = Self::new(&handoff.effect, handoff.seed, handoff.scene_settings)?;
                 }
             }
         }
-        scene.hold_final = handoff.phase.is_some_and(|phase| phase.hold_final);
+        scene.hold_final = replayed && handoff.phase.is_some_and(|phase| phase.hold_final);
         Ok(scene)
     }
 
@@ -1381,14 +1400,30 @@ impl BootScene {
         }
     }
 
-    fn step(&mut self) -> Result<()> {
-        if self.hold_final {
-            return Ok(());
-        }
-        if self.effect.next_frame(&mut self.ctx).is_none() {
-            *self = Self::new(&self.effect_name, self.seed, self.settings)?;
-        } else {
-            self.snapshot();
+    /// - [`LogoMode::Loop`]: plays the animation endlessly, restarting the
+    ///   effect from scratch at the tape boundary.
+    /// - [`LogoMode::OneTime`]: plays the animation exactly once; once finished
+    ///   it holds the final frame and ignores later calls.
+    fn step(&mut self, mode: LogoMode) -> Result<()> {
+        match mode {
+            LogoMode::OneTime => {
+                // A finished one-time playback holds the final frame.
+                if self.hold_final {
+                    return Ok(());
+                }
+                if self.effect.next_frame(&mut self.ctx).is_none() {
+                    self.hold_final = true;
+                } else {
+                    self.snapshot();
+                }
+            }
+            LogoMode::Loop => {
+                if self.effect.next_frame(&mut self.ctx).is_none() {
+                    *self = Self::new(&self.effect_name, self.seed, self.settings)?;
+                } else {
+                    self.snapshot();
+                }
+            }
         }
         Ok(())
     }
@@ -1420,12 +1455,12 @@ fn boot_phase_replay_vhstape_initial_frame_and_continuation() {
         );
         if step == 17 {
             for _ in 0..3 {
-                replay.step().unwrap();
-                live.step().unwrap();
+                replay.step(LogoMode::Loop).unwrap();
+                live.step(LogoMode::Loop).unwrap();
             }
             assert_eq!(format!("{:?}", replay.cells), format!("{:?}", live.cells));
         } else {
-            live.step().unwrap();
+            live.step(LogoMode::Loop).unwrap();
         }
     }
     let mut replay = BootScene::new("vhstape", 42, settings).unwrap();
@@ -1513,7 +1548,7 @@ fn boot_phase_secure_file_acceptance() {
     let accepted = BootScene::for_handoff(&handoff).unwrap();
     let mut live = BootScene::new("vhstape", 42, handoff.scene_settings).unwrap();
     for _ in 0..17 {
-        live.step().unwrap();
+        live.step(LogoMode::Loop).unwrap();
     }
     assert_eq!(format!("{:?}", accepted.cells), format!("{:?}", live.cells));
     handoff.phase = Some(BootPhase {
@@ -1547,7 +1582,7 @@ fn boot_handoff_hold_final_never_restarts_the_effect() {
     let mut scene = BootScene::for_handoff(&handoff).unwrap();
     let frozen = format!("{:?}", scene.cells);
     for _ in 0..100 {
-        scene.step().unwrap();
+        scene.step(LogoMode::OneTime).unwrap();
     }
     assert_eq!(format!("{:?}", scene.cells), frozen);
 }
@@ -3575,7 +3610,15 @@ fn attach_boot_surface(
             // only in this timer, never in per-monitor draw callbacks.
             if painted.get() && !failed {
                 for _ in 0..BOOT_STEPS_PER_TICK {
-                    if let Err(error) = scene.borrow_mut().step() {
+                    // Draw the logo through the single entry point: the
+                    // boot handoff holds the final frame (one-time); a live
+                    // background loops.
+                    let mode = if scene.borrow().hold_final {
+                        LogoMode::OneTime
+                    } else {
+                        LogoMode::Loop
+                    };
+                    if let Err(error) = scene.borrow_mut().step(mode) {
                         log_dbg(&format!("boot scene stopped on engine error: {error}"));
                         failed = true;
                         // Retain the last valid scene; never clear or loop errors.

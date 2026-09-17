@@ -29,7 +29,7 @@ require_literal "ply_pixel_display_set_draw_handler" "$plugin"
 require_literal "ply_pixel_display_draw_area" "$plugin"
 require_literal '#include "ttfx_plymouth.h"' "$plugin"
 require_literal "ttfx_engine_create" "$plugin"
-require_literal "ttfx_engine_step" "$plugin"
+require_literal "ttfx_engine_draw_logo" "$plugin"
 require_literal "ttfx_engine_cells" "$plugin"
 require_literal "ttfx_engine_free" "$plugin"
 require_literal '"decrypt"' "$plugin"
@@ -74,13 +74,13 @@ def body(name):
         raise SystemExit(f"FAIL: unterminated function body: {name}")
     return text[start:i - 1]
 
-if "ttfx_engine_step" in body("on_draw") or "ttfx_engine_cells" in body("on_draw"):
+if "ttfx_engine_step" in body("on_draw") or "ttfx_engine_draw_logo" in body("on_draw") or "ttfx_engine_cells" in body("on_draw"):
     raise SystemExit("FAIL: simulation must not advance from draw callback")
 timeout = body("on_timeout")
-if timeout.count("ttfx_engine_step") != 1:
-    raise SystemExit("FAIL: timeout must advance exactly one simulation step")
-if timeout.count("update_snapshot") != 2:
-    raise SystemExit("FAIL: timeout must snapshot both normal steps and explicit cycle resets")
+if timeout.count("ttfx_engine_draw_logo") != 1:
+    raise SystemExit("FAIL: timeout must draw the logo through the single engine entry point")
+if timeout.count("update_snapshot") != 1:
+    raise SystemExit("FAIL: timeout must snapshot once per tick after drawing the logo")
 if "damage_all_views" not in timeout:
     raise SystemExit("FAIL: timeout must damage every view")
 
