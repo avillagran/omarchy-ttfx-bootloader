@@ -125,14 +125,44 @@ if [[ ! -e $state_dir/omarchy-static && ! -e $state_dir/omarchy-static.absent ]]
   fi
 fi
 
+# rustup ships /usr/bin/cargo as a shim and Arch's rustup package provides
+# `rust`, so the prerequisite check above can pass while root has no usable
+# cargo (rustup without a root default toolchain). Fall back to the invoking
+# user's toolchain, which is what Omarchy actually maintains.
+build_user_dir=
+if ! cargo --version >/dev/null 2>&1; then
+  if runuser -u "$invoking_user" -- cargo --version >/dev/null 2>&1; then
+    build_user_dir=$(mktemp -d /tmp/omarchy-ttfx-build.XXXXXXXX)
+    chown "$invoking_user:$user_group" "$build_user_dir"
+    chmod 0755 "$root"
+    find "$root" -type d -exec chmod a+rx {} +
+    find "$root" -type f -exec chmod a+r {} +
+  else
+    printf 'No working cargo for root or %s. Install Rust (pacman -S rust) and retry.\n' "$invoking_user" >&2
+    exit 1
+  fi
+fi
+
 module="$state_dir/ttfx-plymouth-$arch.so"
-"$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
+if [[ -n $build_user_dir ]]; then
+  runuser -u "$invoking_user" -- "$root/bin/omarchy-plymouth-ttfx-build" build \
+    --output "$build_user_dir/ttfx-plymouth-$arch.so"
+  install -m 0755 "$build_user_dir/ttfx-plymouth-$arch.so" "$module"
+else
+  "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
+fi
 
 bridge_binary=
 if [[ -d $audio_plugin ]]; then
   bridge_target_dir="$state_dir/bridge-target-$arch"
-  CARGO_TARGET_DIR="$bridge_target_dir" cargo build --release --locked --manifest-path "$root/bridge/Cargo.toml"
-  bridge_binary="$bridge_target_dir/release/ttfx-bg-rs"
+  if [[ -n $build_user_dir ]]; then
+    runuser -u "$invoking_user" -- env CARGO_TARGET_DIR="$build_user_dir/bridge-target" \
+      cargo build --release --locked --manifest-path "$root/bridge/Cargo.toml"
+    bridge_binary="$build_user_dir/bridge-target/release/ttfx-bg-rs"
+  else
+    CARGO_TARGET_DIR="$bridge_target_dir" cargo build --release --locked --manifest-path "$root/bridge/Cargo.toml"
+    bridge_binary="$bridge_target_dir/release/ttfx-bg-rs"
+  fi
   [[ -x $bridge_binary ]] || { echo "Bridge build did not produce an executable." >&2; exit 1; }
 fi
 
@@ -234,6 +264,9 @@ chmod 0644 "$menu_extension"
 if [[ -n $bridge_binary ]]; then
   install -m 0755 "$bridge_binary" "$bridge_target"
   chown "$invoking_user:$user_group" "$bridge_target"
+fi
+if [[ -n $build_user_dir ]]; then
+  rm -rf -- "$build_user_dir"
 fi
 
 current=$(PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin omarchy-plymouth-effect-set current)
