@@ -33,22 +33,6 @@ use std::thread;
 use std::time::Duration;
 use vte4::{TerminalExt, TerminalExtManual};
 
-// Thread-local palette shared between the watcher (run_render) and the effects
-// (fx_matrix, etc.). The watcher writes the current palette here whenever the
-// theme changes; effects read it every frame so color changes apply live
-// without restarting the plugin.
-thread_local! {
-    static THEME_PALETTE: RefCell<Vec<String>> = RefCell::new(Vec::new());
-}
-
-fn set_theme_palette(palette: Vec<String>) {
-    THEME_PALETTE.with(|p| *p.borrow_mut() = palette);
-}
-
-fn get_theme_palette() -> Vec<String> {
-    THEME_PALETTE.with(|p| p.borrow().clone())
-}
-
 // Throttled theme-color watcher: reads the theme files at most every `interval`
 // and reports only actual changes. Without this, the frame loop did 2 file reads
 // + TOML parse + string building at 60fps (~120 file opens/sec) — visible stutter
@@ -729,9 +713,7 @@ fn theme_palette(theme: &[(String, String)], effect: &str) -> Vec<String> {
     let bright_red = get("bright_red", "\x1b[91m");
     let bright_green = get("bright_green", "\x1b[92m");
     let bright_cyan = get("bright_cyan", "\x1b[96m");
-    let bright_blue = get("bright_blue", "\x1b[94m");
     let bright_yellow = get("bright_yellow", "\x1b[93m");
-    let bright_magenta = get("bright_magenta", "\x1b[95m");
 
     match effect {
         "rain" => vec![accent.clone(), cyan.clone(), foreground.clone()],
@@ -2236,6 +2218,7 @@ impl PaintCoordinator {
         Ok(true)
     }
 
+    #[cfg(test)]
     fn painted_count(&self) -> usize {
         self.painted.len()
     }
@@ -2631,6 +2614,7 @@ impl SurfaceReadiness {
         self.armed = true;
         self.content_seen = false;
     }
+    #[cfg(test)]
     fn is_armed(&self) -> bool {
         self.armed
     }
@@ -4148,17 +4132,6 @@ impl Screen {
             }
         }
     }
-    fn clear(&mut self) {
-        for r in self.grid.iter_mut() {
-            r.fill(' ');
-        }
-        for r in self.color.iter_mut() {
-            r.iter_mut().for_each(|c| c.clear());
-        }
-        for r in self.dirty.iter_mut() {
-            r.fill(false);
-        }
-    }
     // Clear only cells that were painted the previous frame (dirty tracking).
     // Cells NOT painted keep their color — this enables crossfade between themes.
     fn clear_dirty(&mut self) {
@@ -4185,14 +4158,6 @@ impl Screen {
             self.grid[y][x] = ' ';
             self.color[y][x].clear();
             self.dirty[y][x] = false;
-        }
-    }
-    // Return the ANSI color currently stored at a cell (empty = default).
-    fn get_color(&self, x: usize, y: usize) -> String {
-        if x < self.cols && y < self.rows {
-            self.color[y][x].clone()
-        } else {
-            String::new()
         }
     }
     fn present(&mut self) -> Result<()> {
@@ -5020,11 +4985,11 @@ fn run_render(options: RenderOptions) -> Result<()> {
         show_intro: with_intro,
         intro_beat_sync,
         use_theme_colors,
-        transparent_background,
         char_style,
         boot_char_style,
         seed,
         paint_socket,
+        ..
     } = options;
     log_dbg(&render_runtime_diagnostic(
         &effect, cols, rows, audio, with_intro,
@@ -5046,12 +5011,6 @@ fn run_render(options: RenderOptions) -> Result<()> {
     } else {
         hardcoded_palette(&effect)
     };
-    let palette_refs: Vec<&str> = palette.iter().map(|s| s.as_str()).collect();
-
-    // Initialize the thread-local palette so effects can read live theme colors
-    if use_theme_colors {
-        set_theme_palette(palette.clone());
-    }
 
     set_auto_degrade_enabled(false);
     if with_intro && paint_socket.is_none() {
@@ -5189,7 +5148,6 @@ fn fx_matrix(
         if use_theme_colors {
             if let Some(new_colors) = theme_watcher.changed() {
                 cur_pal = theme_palette(new_colors, effect);
-                set_theme_palette(cur_pal.clone());
                 log_dbg(&format!(
                     "theme colors changed: {effect} palette updated ({})",
                     cur_pal.len()
@@ -5286,7 +5244,6 @@ fn fx_wave(
         if use_theme_colors {
             if let Some(new_colors) = theme_watcher.changed() {
                 cur_pal = theme_palette(new_colors, effect);
-                set_theme_palette(cur_pal.clone());
                 log_dbg(&format!(
                     "theme colors changed: {effect} palette updated ({})",
                     cur_pal.len()
@@ -5342,7 +5299,6 @@ fn fx_bars(
         if use_theme_colors {
             if let Some(new_colors) = theme_watcher.changed() {
                 cur_pal = theme_palette(new_colors, effect);
-                set_theme_palette(cur_pal.clone());
                 log_dbg(&format!(
                     "theme colors changed: {effect} palette updated ({})",
                     cur_pal.len()
@@ -5409,7 +5365,6 @@ fn fx_donut(
         if use_theme_colors {
             if let Some(new_colors) = theme_watcher.changed() {
                 cur_pal = theme_palette(new_colors, effect);
-                set_theme_palette(cur_pal.clone());
                 log_dbg(&format!(
                     "theme colors changed: {effect} palette updated ({})",
                     cur_pal.len()
@@ -5491,7 +5446,6 @@ fn fx_fire(
         if use_theme_colors {
             if let Some(new_colors) = theme_watcher.changed() {
                 cur_pal = theme_palette(new_colors, effect);
-                set_theme_palette(cur_pal.clone());
                 log_dbg(&format!(
                     "theme colors changed: {effect} palette updated ({})",
                     cur_pal.len()
@@ -5567,7 +5521,6 @@ fn fx_starfield(
         if use_theme_colors {
             if let Some(new_colors) = theme_watcher.changed() {
                 cur_pal = theme_palette(new_colors, effect);
-                set_theme_palette(cur_pal.clone());
                 log_dbg(&format!(
                     "theme colors changed: {effect} palette updated ({})",
                     cur_pal.len()
@@ -5634,7 +5587,6 @@ fn fx_life(
         if use_theme_colors {
             if let Some(new_colors) = theme_watcher.changed() {
                 cur_pal = theme_palette(new_colors, effect);
-                set_theme_palette(cur_pal.clone());
                 log_dbg(&format!(
                     "theme colors changed: {effect} palette updated ({})",
                     cur_pal.len()
