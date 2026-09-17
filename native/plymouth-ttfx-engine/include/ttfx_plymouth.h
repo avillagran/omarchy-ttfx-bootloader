@@ -53,6 +53,13 @@ enum {
 };
 
 enum {
+  /* Plays the animation endlessly, seamlessly restarting at the end. */
+  TTFX_LOGO_MODE_LOOP = 0,
+  /* Plays the animation exactly once, then holds the final frame. */
+  TTFX_LOGO_MODE_ONE_TIME = 1
+};
+
+enum {
   TTFX_MAX_EFFECT_NAME_BYTES = 128,
   TTFX_MAX_INPUT_BYTES = 64 * 1024,
   TTFX_MAX_WIDTH = 162,
@@ -91,6 +98,19 @@ int32_t ttfx_engine_step(TtfxEngine *engine, uint8_t *out_looped);
 
 /* Reconstruct the original effect and expose its deterministic first frame. */
 int32_t ttfx_engine_reset(TtfxEngine *engine);
+
+/*
+ * Draws the logo according to mode (TTFX_LOGO_MODE_*). Every caller keeps its
+ * playback state exclusively through this function; the current frame is
+ * always available through ttfx_engine_cells after the call.
+ *
+ * out_looped (may be NULL) is set to 1 only for the call in which a
+ * TTFX_LOGO_MODE_LOOP playback wrapped to a fresh cycle. out_finished (may be
+ * NULL) is set to 1 once a TTFX_LOGO_MODE_ONE_TIME playback has completed and
+ * the final frame is being held; it stays 1 on later calls.
+ */
+int32_t ttfx_engine_draw_logo(TtfxEngine *engine, uint32_t mode,
+                              uint8_t *out_looped, uint8_t *out_finished);
 
 /*
  * Borrows a complete top-to-bottom, left-to-right row-major canvas. The cell

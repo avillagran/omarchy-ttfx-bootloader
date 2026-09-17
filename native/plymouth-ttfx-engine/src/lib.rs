@@ -95,6 +95,17 @@ pub struct TtfxEngine {
     poisoned: bool,
 }
 
+/// Playback mode for [`Engine::draw_logo`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LogoMode {
+    /// Plays the animation endlessly, seamlessly restarting at the end.
+    Loop,
+    /// Plays the animation exactly once. Once playback completes, the final
+    /// frame stays exposed through `cells()` and the outcome reports
+    /// `StepOutcome::Completed` on every subsequent call.
+    OneTime,
+}
+
 impl Engine {
     pub fn create(
         effect_name: &str,
@@ -160,6 +171,30 @@ impl Engine {
         } else {
             self.completed = true;
             Ok(StepOutcome::Completed)
+        }
+    }
+
+    /// Draws the logo according to `mode`. Every caller keeps its playback
+    /// state exclusively through this function; the current frame is always
+    /// available through `cells()` after the call.
+    ///
+    /// - [`LogoMode::Loop`]: advances the animation and, exactly at the tape
+    ///   boundary, reconstructs the next cycle deterministically. Returns
+    ///   `StepOutcome::Completed` only for the call that wrapped, so callers
+    ///   can count cycles.
+    /// - [`LogoMode::OneTime`]: advances the animation until it completes and
+    ///   then holds the final frame; returns `StepOutcome::Completed` once
+    ///   playback has finished and on every later call.
+    pub fn draw_logo(&mut self, mode: LogoMode) -> Result<StepOutcome, EngineError> {
+        match mode {
+            LogoMode::OneTime => self.step(),
+            LogoMode::Loop => match self.step()? {
+                StepOutcome::Completed => {
+                    self.reset()?;
+                    Ok(StepOutcome::Completed)
+                }
+                StepOutcome::Frame => Ok(StepOutcome::Frame),
+            },
         }
     }
 
@@ -478,6 +513,59 @@ pub unsafe extern "C" fn ttfx_engine_reset(engine: *mut TtfxEngine) -> i32 {
     }
 }
 
+/// Draws the logo according to `mode` (TTFX_LOGO_MODE_*). Every caller keeps
+/// its playback state exclusively through this function; the current frame is
+/// always available through `ttfx_engine_cells` after the call.
+///
+/// `out_looped` (may be NULL) is set to 1 only for the call in which a
+/// TTFX_LOGO_MODE_LOOP playback wrapped to a fresh cycle. `out_finished`
+/// (may be NULL) is set to 1 once a TTFX_LOGO_MODE_ONE_TIME playback has
+/// completed and the final frame is being held; it stays 1 on later calls.
+///
+/// # Safety
+///
+/// `engine` must be a live handle created by this library on the current
+/// thread, and each output pointer must be valid for one byte when non-NULL.
+#[no_mangle]
+pub unsafe extern "C" fn ttfx_engine_draw_logo(
+    engine: *mut TtfxEngine,
+    mode: u32,
+    out_looped: *mut u8,
+    out_finished: *mut u8,
+) -> i32 {
+    if !out_looped.is_null() {
+        unsafe { *out_looped = 0 };
+    }
+    if !out_finished.is_null() {
+        unsafe { *out_finished = 0 };
+    }
+    let mode = match mode {
+        x if x == LogoMode::Loop as u32 => LogoMode::Loop,
+        x if x == LogoMode::OneTime as u32 => LogoMode::OneTime,
+        _ => return TTFX_STATUS_INVALID_ARGUMENT,
+    };
+    unsafe {
+        ffi_mutating_boundary(engine, |engine| match engine.inner.draw_logo(mode) {
+            Ok(outcome) => {
+                match mode {
+                    LogoMode::Loop => {
+                        if !out_looped.is_null() {
+                            *out_looped = u8::from(outcome == StepOutcome::Completed);
+                        }
+                    }
+                    LogoMode::OneTime => {
+                        if !out_finished.is_null() {
+                            *out_finished = u8::from(outcome == StepOutcome::Completed);
+                        }
+                    }
+                }
+                TTFX_STATUS_OK
+            }
+            Err(error) => status(error),
+        })
+    }
+}
+
 /// Borrow the top-to-bottom row-major cell array. The pointer remains valid
 /// until the next mutable call on this handle or until the handle is freed.
 ///
@@ -613,6 +701,106 @@ mod tests {
                 .rgb_ints(),
             (0x1a, 0x1b, 0x26)
         );
+    }
+
+    #[test]
+    fn draw_logo_loop_wraps_and_restarts_deterministically() {
+        let mut engine = Engine::create("decrypt", 7, "", 162, 20, 240).unwrap();
+        let first_frame = engine.cells().to_vec();
+
+        let mut wrapped_at = None;
+        for call in 1..=4096 {
+            match engine.draw_logo(LogoMode::Loop) {
+                Ok(StepOutcome::Completed) => {
+                    wrapped_at = Some(call);
+                    break;
+                }
+                Ok(StepOutcome::Frame) => {}
+                Err(error) => panic!("loop draw failed: {error:?}"),
+            }
+        }
+        let wrapped_at = wrapped_at.expect("decrypt must wrap within 4096 draws");
+        assert_eq!(
+            engine.cells().to_vec(),
+            first_frame,
+            "wrap must restart the tape"
+        );
+
+        // The loop keeps producing frames afterwards without a manual reset.
+        assert!(matches!(
+            engine.draw_logo(LogoMode::Loop),
+            Ok(StepOutcome::Frame)
+        ));
+        assert!(wrapped_at > 0);
+    }
+
+    #[test]
+    fn draw_logo_one_time_finishes_and_holds_the_final_frame() {
+        let mut engine = Engine::create("decrypt", 7, "", 162, 20, 240).unwrap();
+
+        let mut finished_at = None;
+        for call in 1..=4096 {
+            match engine.draw_logo(LogoMode::OneTime) {
+                Ok(StepOutcome::Completed) => {
+                    finished_at = Some(call);
+                    break;
+                }
+                Ok(StepOutcome::Frame) => {}
+                Err(error) => panic!("one_time draw failed: {error:?}"),
+            }
+        }
+        assert!(
+            finished_at.is_some(),
+            "decrypt must finish within 4096 draws"
+        );
+
+        let final_frame = engine.cells().to_vec();
+        // Once finished, every later call reports completion and keeps the
+        // exact final frame: one_time holds the last frame forever.
+        for _ in 0..8 {
+            assert!(matches!(
+                engine.draw_logo(LogoMode::OneTime),
+                Ok(StepOutcome::Completed)
+            ));
+            assert_eq!(engine.cells().to_vec(), final_frame);
+        }
+        assert_ne!(
+            final_frame,
+            Engine::create("decrypt", 7, "", 162, 20, 240)
+                .unwrap()
+                .cells()
+                .to_vec()
+        );
+    }
+
+    #[test]
+    fn draw_logo_mode_flag_reports_through_ffi() {
+        let inner = Engine::create("decrypt", 7, "", 162, 20, 240).unwrap();
+        let mut handle = TtfxEngine {
+            inner,
+            poisoned: false,
+        };
+        let raw = &mut handle as *mut TtfxEngine;
+
+        assert_eq!(
+            unsafe { ttfx_engine_draw_logo(raw, 2, ptr::null_mut(), ptr::null_mut()) },
+            TTFX_STATUS_INVALID_ARGUMENT
+        );
+
+        let mut looped = 0u8;
+        let mut finished = 0u8;
+        assert_eq!(
+            unsafe { ttfx_engine_draw_logo(raw, 0, &mut looped, &mut finished) },
+            TTFX_STATUS_OK
+        );
+        assert_eq!(looped, 0);
+        assert_eq!(finished, 0);
+
+        assert_eq!(
+            unsafe { ttfx_engine_draw_logo(raw, 1, &mut looped, &mut finished) },
+            TTFX_STATUS_OK
+        );
+        assert_eq!(finished, 0, "decrypt does not finish in two draws");
     }
 
     #[test]
