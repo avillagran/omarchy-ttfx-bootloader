@@ -32,8 +32,11 @@ Uninstall restores the files, menu extension, previous Plymouth theme, and boot 
 
 ```bash
 bash tests/installer-static.sh
+bash tests/kbd-order-test.sh
 bash tests/shell.d/plymouth-effect-switcher-test.sh
 bash tests/shell.d/plymouth-native-install-test.sh
 bash tests/shell.d/plymouth-native-package-test.sh
 native/plymouth-ttfx-plugin/tests/run.sh
+(cd native/plymouth-ttfx-engine && cargo test --locked)
+(cd bridge && cargo test --locked)
 ```
