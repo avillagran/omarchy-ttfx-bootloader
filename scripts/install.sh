@@ -64,6 +64,7 @@ managed_files() {
     /usr/lib/plymouth/ttfx-plymouth.so \
     /usr/share/plymouth/themes/omarchy/omarchy.plymouth \
     /usr/share/omarchy/default/plymouth/omarchy.plymouth \
+    /usr/share/omarchy/default/plymouth/ttfx-effects.txt \
     /etc/plymouth/plymouthd.conf \
     /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf \
     /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf \
@@ -168,6 +169,7 @@ fi
 
 install -m 0755 "$root/bin/omarchy-plymouth-ttfx-install" "$helper"
 install -m 0644 "$root/default/plymouth/omarchy.plymouth" /usr/share/omarchy/default/plymouth/omarchy.plymouth
+install -m 0644 "$root/default/plymouth/ttfx-effects.txt" /usr/share/omarchy/default/plymouth/ttfx-effects.txt
 install -m 0644 "$root/default/mkinitcpio/zz-ttfx-kbd-order.conf" /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf
 install -d -m 0755 /etc/systemd/system/plymouth-quit.service.d
 install -m 0644 "$root/default/systemd/plymouth-quit.service.d/20-ttfx-deactivate.conf" \

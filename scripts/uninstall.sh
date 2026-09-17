@@ -36,6 +36,7 @@ restore_file() {
 restore_file /usr/lib/plymouth/ttfx-plymouth.so
 restore_file /usr/share/plymouth/themes/omarchy/omarchy.plymouth
 restore_file /usr/share/omarchy/default/plymouth/omarchy.plymouth
+restore_file /usr/share/omarchy/default/plymouth/ttfx-effects.txt
 restore_file /etc/plymouth/plymouthd.conf
 restore_file /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf
 restore_file /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf
