@@ -11,8 +11,8 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_gradient_direction, parse_gradient_steps, parse_positive_float,
-    parse_positive_float_range, parse_positive_int,
+    parse_gradient_direction, parse_gradient_steps, parse_positive_float, parse_positive_float_range,
+    parse_positive_int,
 };
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
@@ -89,15 +89,7 @@ struct Ring {
 
 impl Ring {
     /// Ring.__init__ — consumes one uniform() for rotation_speed.
-    fn new(
-        ctx: &mut EngineCtx,
-        config: &RingsConfig,
-        radius: i64,
-        origin: Coord,
-        ring_coords: Vec<Coord>,
-        ring_gap: i64,
-        ring_color: Color,
-    ) -> Self {
+    fn new(ctx: &mut EngineCtx, config: &RingsConfig, radius: i64, origin: Coord, ring_coords: Vec<Coord>, ring_gap: i64, ring_color: Color) -> Self {
         let clockwise_coords: Vec<Coord> = ring_coords.iter().rev().copied().collect();
         let rotation_speed = ctx.rng.uniform(config.spin_speed.0, config.spin_speed.1);
         Ring {
@@ -114,12 +106,7 @@ impl Ring {
     }
 
     /// Ring.make_disperse_waypoints.
-    fn make_disperse_waypoints(
-        &self,
-        ctx: &mut EngineCtx,
-        id: CharId,
-        origin: Coord,
-    ) -> Result<String, EngineError> {
+    fn make_disperse_waypoints(&self, ctx: &mut EngineCtx, id: CharId, origin: Coord) -> Result<String, EngineError> {
         let disperse_coords = geometry::find_coords_in_rect(origin, self.ring_gap);
         let mut waypoint_coords: Vec<Coord> = Vec::with_capacity(5);
         for _ in 0..5 {
@@ -134,8 +121,7 @@ impl Ring {
             .map_err(EngineError::Other)?;
         let path = ch.motion.paths.get_mut(&path_id).unwrap();
         for coord in waypoint_coords {
-            path.new_waypoint(coord, None, "")
-                .map_err(EngineError::Other)?;
+            path.new_waypoint(coord, None, "").map_err(EngineError::Other)?;
         }
         Ok(path_id)
     }
@@ -199,21 +185,12 @@ impl Rings {
         // make gradient scene
         {
             let ch = &mut ctx.terminal.arena[id.0 as usize];
-            let gradient_scn = ch
-                .animation
-                .new_scene(false, None, None, "gradient", uses_pre);
+            let gradient_scn = ch.animation.new_scene(false, None, None, "gradient", uses_pre);
             let scene = ch.animation.scenes.get_mut(&gradient_scn).unwrap();
             if dynamic {
                 let colors = self.character_final_color_map.get(&id).unwrap().clone();
                 scene
-                    .add_frame(
-                        &input_symbol,
-                        1,
-                        VisualParams {
-                            colors: Some(colors),
-                            ..Default::default()
-                        },
-                    )
+                    .add_frame(&input_symbol, 1, VisualParams { colors: Some(colors), ..Default::default() })
                     .map_err(EngineError::Other)?;
             } else {
                 let final_fg_color = self
@@ -223,16 +200,10 @@ impl Rings {
                     .fg_color
                     .clone()
                     .expect("gradient mapping fg");
-                let char_gradient =
-                    Gradient::with_steps(&[final_fg_color, ring.ring_color.clone()], 8, false)
-                        .map_err(EngineError::Other)?;
+                let char_gradient = Gradient::with_steps(&[final_fg_color, ring.ring_color.clone()], 8, false)
+                    .map_err(EngineError::Other)?;
                 scene
-                    .apply_gradient_to_symbols(
-                        &[input_symbol.clone()],
-                        3,
-                        Some(&char_gradient),
-                        None,
-                    )
+                    .apply_gradient_to_symbols(&[input_symbol.clone()], 3, Some(&char_gradient), None)
                     .map_err(EngineError::Other)?;
             }
         }
@@ -240,11 +211,7 @@ impl Rings {
         // make rotation waypoints
         let mut ring_paths: Vec<String> = Vec::new();
         let character_starting_index = ring.characters.len();
-        let coords = if clockwise {
-            &ring.clockwise_coords
-        } else {
-            &ring.counter_clockwise_coords
-        };
+        let coords = if clockwise { &ring.clockwise_coords } else { &ring.counter_clockwise_coords };
         let rotated: Vec<Coord> = coords[character_starting_index..]
             .iter()
             .chain(coords[..character_starting_index].iter())
@@ -254,42 +221,24 @@ impl Rings {
             let ch = &mut ctx.terminal.arena[id.0 as usize];
             let path_id = ch
                 .motion
-                .new_path(
-                    ring.rotation_speed,
-                    None,
-                    None,
-                    0,
-                    false,
-                    &ring_paths.len().to_string(),
-                )
+                .new_path(ring.rotation_speed, None, None, 0, false, &ring_paths.len().to_string())
                 .map_err(EngineError::Other)?;
             let path = ch.motion.paths.get_mut(&path_id).unwrap();
             let waypoint_id = path.waypoints.len().to_string();
-            path.new_waypoint(coord, None, &waypoint_id)
-                .map_err(EngineError::Other)?;
+            path.new_waypoint(coord, None, &waypoint_id).map_err(EngineError::Other)?;
             ring_paths.push(path_id);
         }
-        ring.character_last_ring_path
-            .insert(id, ring_paths[0].clone());
+        ring.character_last_ring_path.insert(id, ring_paths[0].clone());
 
         // make disperse scene
         {
             let ch = &mut ctx.terminal.arena[id.0 as usize];
-            let disperse_scn = ch
-                .animation
-                .new_scene(false, None, None, "disperse", uses_pre);
+            let disperse_scn = ch.animation.new_scene(false, None, None, "disperse", uses_pre);
             let scene = ch.animation.scenes.get_mut(&disperse_scn).unwrap();
             if dynamic {
                 let colors = self.character_final_color_map.get(&id).unwrap().clone();
                 scene
-                    .add_frame(
-                        &input_symbol,
-                        1,
-                        VisualParams {
-                            colors: Some(colors),
-                            ..Default::default()
-                        },
-                    )
+                    .add_frame(&input_symbol, 1, VisualParams { colors: Some(colors), ..Default::default() })
                     .map_err(EngineError::Other)?;
             } else {
                 let final_fg_color = self
@@ -299,21 +248,14 @@ impl Rings {
                     .fg_color
                     .clone()
                     .expect("gradient mapping fg");
-                let disperse_gradient =
-                    Gradient::with_steps(&[ring.ring_color.clone(), final_fg_color], 8, false)
-                        .map_err(EngineError::Other)?;
+                let disperse_gradient = Gradient::with_steps(&[ring.ring_color.clone(), final_fg_color], 8, false)
+                    .map_err(EngineError::Other)?;
                 scene
-                    .apply_gradient_to_symbols(
-                        &[input_symbol.clone()],
-                        10,
-                        Some(&disperse_gradient),
-                        None,
-                    )
+                    .apply_gradient_to_symbols(&[input_symbol.clone()], 10, Some(&disperse_gradient), None)
                     .map_err(EngineError::Other)?;
             }
         }
-        ctx.chain_paths(id, &ring_paths, true)
-            .map_err(EngineError::Other)?;
+        ctx.chain_paths(id, &ring_paths, true).map_err(EngineError::Other)?;
         ring.characters.push(id);
         Ok(())
     }
@@ -352,10 +294,7 @@ impl Rings {
                     .expect("last ring path missing")
                     .waypoints[0]
                     .coord;
-                let path_id = ch
-                    .motion
-                    .new_path(0.1, None, None, 0, false, "")
-                    .map_err(EngineError::Other)?;
+                let path_id = ch.motion.new_path(0.1, None, None, 0, false, "").map_err(EngineError::Other)?;
                 ch.motion
                     .paths
                     .get_mut(&path_id)
@@ -379,12 +318,7 @@ impl Rings {
 }
 
 impl EffectHooks for Rings {
-    fn dispatch_callback(
-        &mut self,
-        ctx: &mut EngineCtx,
-        character: CharId,
-        callback: &EffectCallback,
-    ) {
+    fn dispatch_callback(&mut self, ctx: &mut EngineCtx, character: CharId, callback: &EffectCallback) {
         if callback.id == CB_SET_INVISIBLE {
             ctx.terminal.set_character_visibility(character, false);
         }
@@ -396,26 +330,20 @@ impl Effect for Rings {
         // ring_gap = int(max(round(min(top, right) * config.ring_gap), 1))
         let ring_gap = std::cmp::max(
             round_half_even(
-                std::cmp::min(ctx.terminal.canvas.top, ctx.terminal.canvas.right) as f64
-                    * self.config.ring_gap,
+                std::cmp::min(ctx.terminal.canvas.top, ctx.terminal.canvas.right) as f64 * self.config.ring_gap,
             ),
             1,
         );
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         let mut pending_chars: Vec<CharId> = Vec::new();
         for id in characters {
@@ -432,13 +360,9 @@ impl Effect for Rings {
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
-            self.character_final_color_map
-                .insert(id, final_colors.clone());
+            self.character_final_color_map.insert(id, final_colors.clone());
             let start_scn = {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 let scene_id = ch.animation.new_scene(false, None, None, "", uses_pre);
@@ -446,14 +370,7 @@ impl Effect for Rings {
                     .scenes
                     .get_mut(&scene_id)
                     .unwrap()
-                    .add_frame(
-                        &input_symbol,
-                        1,
-                        VisualParams {
-                            colors: Some(final_colors),
-                            ..Default::default()
-                        },
-                    )
+                    .add_frame(&input_symbol, 1, VisualParams { colors: Some(final_colors), ..Default::default() })
                     .map_err(EngineError::Other)?;
                 scene_id
             };
@@ -485,32 +402,19 @@ impl Effect for Rings {
         while radius < radius_limit {
             let ring_coords = geometry::find_coords_on_circle(center, radius, 7 * radius, true);
             // check if any part of the ring is in the canvas, if not, stop creating rings
-            let in_canvas_count = ring_coords
-                .iter()
-                .filter(|&&coord| ctx.terminal.canvas.coord_is_in_canvas(coord))
-                .count();
+            let in_canvas_count =
+                ring_coords.iter().filter(|&&coord| ctx.terminal.canvas.coord_is_in_canvas(coord)).count();
             if (in_canvas_count as f64) / (ring_coords.len() as f64) < 0.25 {
                 break;
             }
-            let ring_color =
-                self.config.ring_colors[rings.len() % self.config.ring_colors.len()].clone();
-            let ring = Ring::new(
-                ctx,
-                &self.config,
-                radius,
-                center,
-                ring_coords,
-                ring_gap,
-                ring_color,
-            );
+            let ring_color = self.config.ring_colors[rings.len() % self.config.ring_colors.len()].clone();
+            let ring = Ring::new(ctx, &self.config, radius, center, ring_coords, ring_gap, ring_color);
             rings.push(ring);
             radius += ring_gap;
         }
 
         // assign characters to rings
-        let mut pending_iter = pending_chars
-            .into_iter()
-            .collect::<std::collections::VecDeque<_>>();
+        let mut pending_iter = pending_chars.into_iter().collect::<std::collections::VecDeque<_>>();
         let mut ring_chars: HashSet<CharId> = HashSet::new();
         for (ring_count, ring) in rings.iter_mut().enumerate() {
             for _ in 0..ring.counter_clockwise_coords.len() {
@@ -527,8 +431,7 @@ impl Effect for Rings {
         // make external waypoints for characters not in rings
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             if ring_chars.contains(&id) {
@@ -553,10 +456,7 @@ impl Effect for Rings {
                 id,
                 Event::PathComplete,
                 CallerKey::Path("external".to_string()),
-                EventAction::Callback(EffectCallback {
-                    id: CB_SET_INVISIBLE,
-                    args: Vec::new(),
-                }),
+                EventAction::Callback(EffectCallback { id: CB_SET_INVISIBLE, args: Vec::new() }),
             )
             .map_err(EngineError::Other)?;
         }
@@ -588,13 +488,8 @@ impl Effect for Rings {
                     for ring in &mut rings {
                         let characters = ring.characters.clone();
                         for id in characters {
-                            let ring_start_coord = ctx.terminal.arena[id.0 as usize]
-                                .motion
-                                .paths
-                                .get("0")
-                                .unwrap()
-                                .waypoints[0]
-                                .coord;
+                            let ring_start_coord =
+                                ctx.terminal.arena[id.0 as usize].motion.paths.get("0").unwrap().waypoints[0].coord;
                             let disperse_path = ring
                                 .make_disperse_waypoints(ctx, id, ring_start_coord)
                                 .expect("make_disperse_waypoints failed");
@@ -652,21 +547,13 @@ impl Effect for Rings {
                         self.phase = Phase::Final;
                         let characters = {
                             let filter = CharacterFilter::default();
-                            ctx.terminal.get_characters(
-                                &mut ctx.rng,
-                                filter,
-                                CharacterSort::TopToBottomLeftToRight,
-                            )
+                            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
                         };
                         for id in characters {
                             ctx.terminal.set_character_visibility(id, true);
                             ctx.activate_path(self, id, "home");
                             ctx.active_characters.insert(id);
-                            if ctx.terminal.arena[id.0 as usize]
-                                .motion
-                                .paths
-                                .contains_key("external")
-                            {
+                            if ctx.terminal.arena[id.0 as usize].motion.paths.contains_key("external") {
                                 continue;
                             }
                             ctx.activate_scene(self, id, "disperse");

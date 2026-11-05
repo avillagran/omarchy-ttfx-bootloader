@@ -93,7 +93,8 @@ int32_t ttfx_engine_create_with_background(const char *effect, uint64_t seed,
                                            uint32_t background_rgb,
                                            TtfxEngine **out_engine);
 
-/* out_looped is 1 only for the first frame of a reconstructed loop. */
+/* The legacy out_looped name reports completion: 1 retains the terminal frame.
+ * Further steps return 1 unchanged until ttfx_engine_reset is called. */
 int32_t ttfx_engine_step(TtfxEngine *engine, uint8_t *out_looped);
 
 /* Reconstruct the original effect and expose its deterministic first frame. */

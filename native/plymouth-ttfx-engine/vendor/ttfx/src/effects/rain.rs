@@ -6,8 +6,7 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float_range,
-    parse_symbol,
+    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float_range, parse_symbol,
 };
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
@@ -74,24 +73,14 @@ impl Rain {
 }
 
 impl EffectHooks for Rain {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Rain {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -99,22 +88,15 @@ impl Effect for Rain {
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let final_colors = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
                 if dynamic {
-                    ColorPair::new(
-                        ch.animation.input_fg_color.clone(),
-                        ch.animation.input_bg_color.clone(),
-                    )
+                    ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
                 } else {
-                    ColorPair::new(
-                        Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()),
-                        None,
-                    )
+                    ColorPair::new(Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()), None)
                 }
             };
             self.character_final_color_map.insert(id, final_colors);
@@ -124,11 +106,7 @@ impl Effect for Rain {
         for id in characters {
             let (input_coord, input_symbol, uses_pre) = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
-                (
-                    ch.input_coord,
-                    ch.input_symbol.clone(),
-                    ch.uses_input_preexisting_colors,
-                )
+                (ch.input_coord, ch.input_symbol.clone(), ch.uses_input_preexisting_colors)
             };
             let raindrop_color = ctx.rng.choice(&self.config.rain_colors).clone();
             let rain_scn = {
@@ -188,39 +166,27 @@ impl Effect for Rain {
                         .add_frame(
                             &input_symbol,
                             3,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
             } else {
                 let final_fg = final_colors.fg_color.clone().expect("gradient mapping fg");
-                let raindrop_gradient =
-                    Gradient::with_steps(&[raindrop_color.clone(), final_fg], 7, false)
-                        .map_err(EngineError::Other)?;
+                let raindrop_gradient = Gradient::with_steps(&[raindrop_color.clone(), final_fg], 7, false)
+                    .map_err(EngineError::Other)?;
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 ch.animation
                     .scenes
                     .get_mut(&fade_scn)
                     .unwrap()
-                    .apply_gradient_to_symbols(
-                        &[input_symbol.clone()],
-                        3,
-                        Some(&raindrop_gradient),
-                        None,
-                    )
+                    .apply_gradient_to_symbols(&[input_symbol.clone()], 3, Some(&raindrop_gradient), None)
                     .map_err(EngineError::Other)?;
             }
             ctx.activate_scene(self, id, &rain_scn);
-            let speed = ctx
-                .rng
-                .uniform(self.config.movement_speed.0, self.config.movement_speed.1);
+            let speed = ctx.rng.uniform(self.config.movement_speed.0, self.config.movement_speed.1);
             let input_path = {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.motion
-                    .set_coordinate(Coord::new(input_coord.column, canvas_top));
+                ch.motion.set_coordinate(Coord::new(input_coord.column, canvas_top));
                 let path_id = ch
                     .motion
                     .new_path(speed, Some(self.config.movement_easing), None, 0, false, "")
@@ -254,10 +220,7 @@ impl Effect for Rain {
     }
 
     fn next_frame(&mut self, ctx: &mut EngineCtx) -> Option<String> {
-        if !self.group_by_row.is_empty()
-            || !ctx.active_characters.is_empty()
-            || !self.pending_chars.is_empty()
-        {
+        if !self.group_by_row.is_empty() || !ctx.active_characters.is_empty() || !self.pending_chars.is_empty() {
             if self.pending_chars.is_empty() && !self.group_by_row.is_empty() {
                 let min_row = *self.group_by_row.keys().next().unwrap();
                 let group = self.group_by_row.remove(&min_row).unwrap();

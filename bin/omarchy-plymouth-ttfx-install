@@ -47,6 +47,31 @@ recovery_dir="$system_root/usr/share/plymouth/themes/omarchy-static"
 native_template="$system_root/usr/share/omarchy/default/plymouth/omarchy.plymouth"
 uki_dir="$system_root/boot/EFI/Linux"
 
+# The classic images mkinitcpio -P writes are the ones its presets name. A
+# kept copy beside them, such as a previous kernel's initramfs saved by hand,
+# is not rebuilt, so it is neither verified nor rolled back.
+preset_images() {
+  local preset
+  local -a presets
+  mapfile -d '' -t presets < <(find "$system_root/etc/mkinitcpio.d" -maxdepth 1 -type f -name '*.preset' -print0 2>/dev/null | sort -z)
+  for preset in "${presets[@]}"; do
+    (
+      set +eu
+      PRESETS=()
+      # shellcheck disable=SC1090
+      source "$preset" >/dev/null 2>&1
+      for name in "${PRESETS[@]}"; do
+        image_variable=${name}_image
+        image=${!image_variable:-}
+        if [[ $image == /* && -f $system_root$image ]]; then
+          printf '%s\0' "$system_root$image"
+        fi
+      done
+      exit 0
+    )
+  done | sort -zu
+}
+
 # Omarchy on Limine builds UKIs. GRUB/Asahi uses classic initramfs images.
 # Both are inspected by lsinitcpio and must be rolled back transactionally.
 boot_artifacts() {
@@ -54,6 +79,10 @@ boot_artifacts() {
   mapfile -d '' -t ukis < <(find "$uki_dir" -maxdepth 1 -type f -name 'omarchy_linux*.efi' -print0 2>/dev/null | sort -z)
   if (( ${#ukis[@]} )); then
     printf '%s\0' "${ukis[@]}"
+    return
+  fi
+  if compgen -G "$system_root/etc/mkinitcpio.d/*.preset" >/dev/null; then
+    preset_images
     return
   fi
   find "$system_root/boot" -maxdepth 1 -type f -name 'initramfs-*.img' -print0 2>/dev/null | sort -z

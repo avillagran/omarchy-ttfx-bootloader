@@ -78,12 +78,11 @@ impl Row {
     fn set_color(&self, ctx: &mut EngineCtx, fg_color: Option<Color>, bg_color: Option<Color>) {
         for &id in &self.characters {
             let ch = &mut ctx.terminal.arena[id.0 as usize];
-            let input_symbol = ch.input_symbol.clone();
             let uses_pre = ch.uses_input_preexisting_colors;
             ch.animation.set_appearance(
-                &input_symbol,
+                &ch.input_symbol,
                 uses_pre,
-                Some(&input_symbol.clone()),
+                None,
                 Some(ColorPair::new(fg_color.clone(), bg_color.clone())),
             );
         }
@@ -113,32 +112,19 @@ impl Overflow {
 }
 
 impl EffectHooks for Overflow {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Overflow {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
-        let fills_filter = CharacterFilter {
-            inner_fill_chars: true,
-            outer_fill_chars: true,
-            ..Default::default()
-        };
+        let fills_filter =
+            CharacterFilter { inner_fill_chars: true, outer_fill_chars: true, ..Default::default() };
         let characters = ctx.terminal.get_characters(
             &mut ctx.rng,
             fills_filter,
@@ -153,9 +139,8 @@ impl Effect for Overflow {
             self.character_final_color_map.insert(id, color);
         }
         let (lower_range, upper_range) = self.config.overflow_cycles_range;
-        let mut rows = ctx
-            .terminal
-            .get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowTopToBottom);
+        let mut rows =
+            ctx.terminal.get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowTopToBottom);
         if upper_range > 0 {
             for _ in 0..ctx.rng.randint(lower_range, upper_range) {
                 ctx.rng.shuffle(&mut rows);
@@ -163,16 +148,7 @@ impl Effect for Overflow {
                     let mut copied_characters: Vec<CharId> = Vec::new();
                     // copy the character attributes to new characters
                     for &id in row {
-                        let (
-                            symbol,
-                            coord,
-                            fg_seq,
-                            bg_seq,
-                            no_color,
-                            use_xterm,
-                            input_fg,
-                            input_bg,
-                        ) = {
+                        let (symbol, coord, fg_seq, bg_seq, no_color, use_xterm, input_fg, input_bg) = {
                             let ch = &ctx.terminal.arena[id.0 as usize];
                             (
                                 ch.input_symbol.clone(),
@@ -187,8 +163,7 @@ impl Effect for Overflow {
                         };
                         let copy_id = ctx.terminal.add_character(&symbol, coord);
                         let copy = &mut ctx.terminal.arena[copy_id.0 as usize];
-                        copy.animation.existing_color_handling =
-                            ctx.terminal.config.existing_color_handling;
+                        copy.animation.existing_color_handling = ctx.terminal.config.existing_color_handling;
                         copy.uses_input_preexisting_colors = true;
                         copy.input_ansi_fg_sequence = fg_seq;
                         copy.input_ansi_bg_sequence = bg_seq;
@@ -198,19 +173,13 @@ impl Effect for Overflow {
                         copy.animation.input_bg_color = input_bg;
                         copied_characters.push(copy_id);
                     }
-                    self.pending_rows.push_back(Row {
-                        characters: copied_characters,
-                        final_: false,
-                    });
+                    self.pending_rows.push_back(Row { characters: copied_characters, final_: false });
                 }
             }
         }
         // add rows in correct order to the end of pending_rows
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
-        for row in ctx
-            .terminal
-            .get_characters_grouped(fills_filter, CharacterGroup::RowTopToBottom)
-        {
+        for row in ctx.terminal.get_characters_grouped(fills_filter, CharacterGroup::RowTopToBottom) {
             for &id in &row {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 let current_symbol = ch.animation.current_character_visual.symbol.clone();
@@ -244,10 +213,7 @@ impl Effect for Overflow {
                     );
                 }
             }
-            self.pending_rows.push_back(Row {
-                characters: row,
-                final_: true,
-            });
+            self.pending_rows.push_back(Row { characters: row, final_: true });
         }
         self.delay = 0;
         let steps = std::cmp::max(
@@ -273,12 +239,9 @@ impl Effect for Overflow {
                         for row in &self.active_rows {
                             row.move_up(ctx);
                             if !row.final_ {
-                                let head_row = ctx.terminal.arena[row.characters[0].0 as usize]
-                                    .motion
-                                    .current_coord
-                                    .row;
-                                let index =
-                                    std::cmp::min(head_row, spectrum.len() as i64 - 1) as usize;
+                                let head_row =
+                                    ctx.terminal.arena[row.characters[0].0 as usize].motion.current_coord.row;
+                                let index = std::cmp::min(head_row, spectrum.len() as i64 - 1) as usize;
                                 row.set_color(ctx, Some(spectrum[index].clone()), None);
                             }
                         }
@@ -300,9 +263,8 @@ impl Effect for Overflow {
             }
             let canvas_top = ctx.terminal.canvas.top;
             let arena = &ctx.terminal.arena;
-            self.active_rows.retain(|row| {
-                arena[row.characters[0].0 as usize].motion.current_coord.row <= canvas_top
-            });
+            self.active_rows
+                .retain(|row| arena[row.characters[0].0 as usize].motion.current_coord.row <= canvas_top);
             ctx.update(self);
             return Some(ctx.frame());
         }

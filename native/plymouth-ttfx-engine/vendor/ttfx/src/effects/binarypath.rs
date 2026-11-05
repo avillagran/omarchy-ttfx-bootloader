@@ -65,9 +65,9 @@ struct BinaryRepresentation {
 impl BinaryRepresentation {
     /// _BinaryRepresentation._travel_complete.
     fn travel_complete(&self, ctx: &EngineCtx) -> bool {
-        self.binary_characters.iter().all(|&bin_char| {
-            ctx.terminal.arena[bin_char.0 as usize].motion.current_coord == self.input_coord
-        })
+        self.binary_characters
+            .iter()
+            .all(|&bin_char| ctx.terminal.arena[bin_char.0 as usize].motion.current_coord == self.input_coord)
     }
 }
 
@@ -113,51 +113,33 @@ impl BinaryPath {
 }
 
 impl EffectHooks for BinaryPath {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for BinaryPath {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
         // __init__: final_wipe_chars computed before build()
-        self.final_wipe_chars = ctx.terminal.get_characters_grouped(
-            CharacterFilter::default(),
-            CharacterGroup::DiagonalTopRightToBottomLeft,
-        );
+        self.final_wipe_chars = ctx
+            .terminal
+            .get_characters_grouped(CharacterFilter::default(), CharacterGroup::DiagonalTopRightToBottomLeft);
 
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let ch = &ctx.terminal.arena[id.0 as usize];
             let final_colors = if dynamic {
-                ColorPair::new(
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                )
+                ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()), None)
             };
             self.character_final_color_map.insert(id, final_colors);
         }
@@ -165,10 +147,7 @@ impl Effect for BinaryPath {
         for &id in &characters {
             let (symbol, input_coord) = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
-                (
-                    ch.animation.current_character_visual.symbol.clone(),
-                    ch.input_coord,
-                )
+                (ch.animation.current_character_visual.symbol.clone(), ch.input_coord)
             };
             // format(ord(symbol), "08b")
             let code_point = symbol.chars().next().expect("empty symbol") as u32;
@@ -181,9 +160,7 @@ impl Effect for BinaryPath {
                 is_active: false,
             };
             for binary_char in binary_string.chars() {
-                let added = ctx
-                    .terminal
-                    .add_character(&binary_char.to_string(), Coord::new(0, 0));
+                let added = ctx.terminal.add_character(&binary_char.to_string(), Coord::new(0, 0));
                 bin_rep.binary_characters.push(added);
                 bin_rep.pending_binary_characters.push(added);
             }
@@ -229,9 +206,7 @@ impl Effect for BinaryPath {
                     last_orientation = Orientation::Row;
                 } else if last_orientation == Orientation::Row && max_column_distance > 0 {
                     next_coord = Coord::new(
-                        last_coord.column
-                            + ctx.rng.randint(1, std::cmp::min(max_column_distance, 4))
-                                * column_direction,
+                        last_coord.column + ctx.rng.randint(1, std::cmp::min(max_column_distance, 4)) * column_direction,
                         last_coord.row,
                     );
                     last_orientation = Orientation::Col;
@@ -255,8 +230,7 @@ impl Effect for BinaryPath {
                         .map_err(EngineError::Other)?;
                     let path = ch.motion.paths.get_mut(&path_id).unwrap();
                     for &coord in &path_coords {
-                        path.new_waypoint(coord, None, "")
-                            .map_err(EngineError::Other)?;
+                        path.new_waypoint(coord, None, "").map_err(EngineError::Other)?;
                     }
                     path_id
                 };
@@ -275,10 +249,7 @@ impl Effect for BinaryPath {
                         .add_frame(
                             &symbol,
                             1,
-                            VisualParams {
-                                colors: Some(ColorPair::new(Some(color), None)),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::new(Some(color), None)), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                     scene_id
@@ -296,43 +267,25 @@ impl Effect for BinaryPath {
             let final_colors = self.character_final_color_map.get(&id).unwrap().clone();
             let final_fg_color = final_colors.fg_color.clone();
             let final_bg_color = final_colors.bg_color.clone();
-            let dim_fg_color = final_fg_color
-                .as_ref()
-                .map(|c| Animation::adjust_color_brightness(c, 0.5));
-            let dim_bg_color = final_bg_color
-                .as_ref()
-                .map(|c| Animation::adjust_color_brightness(c, 0.5));
+            let dim_fg_color = final_fg_color.as_ref().map(|c| Animation::adjust_color_brightness(c, 0.5));
+            let dim_bg_color = final_bg_color.as_ref().map(|c| Animation::adjust_color_brightness(c, 0.5));
             let collapse_fg_gradient = match &dim_fg_color {
                 Some(dim) => Some(
-                    Gradient::with_steps(
-                        &[Color::from_hex("ffffff").unwrap(), dim.clone()],
-                        7,
-                        false,
-                    )
-                    .map_err(EngineError::Other)?,
+                    Gradient::with_steps(&[Color::from_hex("ffffff").unwrap(), dim.clone()], 7, false)
+                        .map_err(EngineError::Other)?,
                 ),
                 None => None,
             };
             let collapse_bg_gradient = match &dim_bg_color {
                 Some(dim) => Some(
-                    Gradient::with_steps(
-                        &[Color::from_hex("ffffff").unwrap(), dim.clone()],
-                        7,
-                        false,
-                    )
-                    .map_err(EngineError::Other)?,
+                    Gradient::with_steps(&[Color::from_hex("ffffff").unwrap(), dim.clone()], 7, false)
+                        .map_err(EngineError::Other)?,
                 ),
                 None => None,
             };
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                let collapse_scn = ch.animation.new_scene(
-                    false,
-                    None,
-                    Some(Easing::InQuad),
-                    "collapse_scn",
-                    uses_pre,
-                );
+                let collapse_scn = ch.animation.new_scene(false, None, Some(Easing::InQuad), "collapse_scn", uses_pre);
                 let scene = ch.animation.scenes.get_mut(&collapse_scn).unwrap();
                 if collapse_fg_gradient.is_some() || collapse_bg_gradient.is_some() {
                     scene
@@ -348,10 +301,7 @@ impl Effect for BinaryPath {
                         .add_frame(
                             &input_symbol,
                             3,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
@@ -359,23 +309,19 @@ impl Effect for BinaryPath {
 
             let brighten_fg_gradient = match (&dim_fg_color, &final_fg_color) {
                 (Some(dim), Some(final_fg)) => Some(
-                    Gradient::with_steps(&[dim.clone(), final_fg.clone()], 10, false)
-                        .map_err(EngineError::Other)?,
+                    Gradient::with_steps(&[dim.clone(), final_fg.clone()], 10, false).map_err(EngineError::Other)?,
                 ),
                 _ => None,
             };
             let brighten_bg_gradient = match (&dim_bg_color, &final_bg_color) {
                 (Some(dim), Some(final_bg)) => Some(
-                    Gradient::with_steps(&[dim.clone(), final_bg.clone()], 10, false)
-                        .map_err(EngineError::Other)?,
+                    Gradient::with_steps(&[dim.clone(), final_bg.clone()], 10, false).map_err(EngineError::Other)?,
                 ),
                 _ => None,
             };
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                let brighten_scn =
-                    ch.animation
-                        .new_scene(false, None, None, "brighten_scn", uses_pre);
+                let brighten_scn = ch.animation.new_scene(false, None, None, "brighten_scn", uses_pre);
                 let scene = ch.animation.scenes.get_mut(&brighten_scn).unwrap();
                 if brighten_fg_gradient.is_some() || brighten_bg_gradient.is_some() {
                     scene
@@ -391,10 +337,7 @@ impl Effect for BinaryPath {
                         .add_frame(
                             &input_symbol,
                             2,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
@@ -402,8 +345,7 @@ impl Effect for BinaryPath {
         }
         self.max_active_binary_groups = std::cmp::max(
             1,
-            (self.config.active_binary_groups * self.pending_binary_representations.len() as f64)
-                as i64,
+            (self.config.active_binary_groups * self.pending_binary_representations.len() as f64) as i64,
         );
         Ok(())
     }
@@ -414,10 +356,8 @@ impl Effect for BinaryPath {
                 while (self.active_binary_reps.len() as i64) < self.max_active_binary_groups
                     && !self.pending_binary_representations.is_empty()
                 {
-                    let index = ctx
-                        .rng
-                        .randrange(0, self.pending_binary_representations.len() as i64)
-                        as usize;
+                    let index =
+                        ctx.rng.randrange(0, self.pending_binary_representations.len() as i64) as usize;
                     let mut next_binary_rep = self.pending_binary_representations.remove(index);
                     next_binary_rep.is_active = true;
                     self.active_binary_reps.push(next_binary_rep);
@@ -437,8 +377,7 @@ impl Effect for BinaryPath {
                             }
                             active_rep.is_active = false;
                             // _activate_source_character
-                            ctx.terminal
-                                .set_character_visibility(active_rep.character, true);
+                            ctx.terminal.set_character_visibility(active_rep.character, true);
                             ctx.activate_scene(self, active_rep.character, "collapse_scn");
                             ctx.active_characters.insert(active_rep.character);
                         }

@@ -5,7 +5,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 pass() { printf 'ok - %s\n' "$1"; }
 
-for script in install.sh uninstall.sh scripts/install.sh scripts/uninstall.sh bin/omarchy-plymouth-*; do
+for script in install.sh uninstall.sh scripts/common.sh scripts/install.sh scripts/uninstall.sh bin/omarchy-plymouth-*; do
   bash -n "$root/$script"
 done
 pass "shell scripts parse"
@@ -39,41 +39,40 @@ grep -F 'chmod 0644 "$module_stage"' "$root/bin/omarchy-plymouth-ttfx-install" >
 grep -F "printf '[Daemon]\\n'" "$root/bin/omarchy-plymouth-ttfx-install" >/dev/null || fail "empty Plymouth configuration is not repaired"
 pass "installer covers Omarchy runtime paths and Plymouth 26 edge cases"
 
-python3 -m json.tool "$root/default/omarchy/ttfx-menu.json" >/dev/null
-python3 - "$root/default/omarchy/ttfx-menu.json" <<'PY'
-import json, sys
-obj=json.load(open(sys.argv[1]))
-assert set(obj) == {
-    "style.bootloader",
-    "style.bootloader.full-animated",
-    "style.bootloader.input-only",
-    "style.bootloader.effect",
+python3 - "$root/default/omarchy/ttfx-menu.jsonc" <<'PY'
+import json, re, sys
+text = open(sys.argv[1]).read()
+entries = json.loads(re.sub(r",(\s*})", r"\1", "{" + text + "}"))
+assert set(entries) == {
+    "appearance.bootloader",
+    "appearance.bootloader.full-animated",
+    "appearance.bootloader.input-only",
+    "appearance.bootloader.effect",
 }
+assert all(line.startswith("  ") and line.endswith(",") for line in text.splitlines())
 PY
-pass "menu extension is valid and complete"
+pass "menu block is valid and complete"
 
-python3 - "$root/scripts/install.sh" "$root/default/omarchy/ttfx-menu.json" <<'PY'
-import json, sys, tempfile
-from pathlib import Path
-script, additions = map(Path, sys.argv[1:])
-text = script.read_text()
-marker = "python3 - \"$menu_extension\" \"$root/default/omarchy/ttfx-menu.json\" <<'PY'\n"
-program = text.split(marker, 1)[1].split("\nPY\n", 1)[0]
-with tempfile.TemporaryDirectory() as directory:
-    extension = Path(directory) / "menu.jsonc"
-    extension.write_text('''{
-      // keep existing entries
-      "existing": {"url": "https://example.test/a//b",},
-      /* and block comments */
-    }''')
-    old_argv = sys.argv
-    sys.argv = ["merge-menu", str(extension), str(additions)]
-    try:
-        exec(compile(program, str(script), "exec"), {})
-    finally:
-        sys.argv = old_argv
-    merged = json.loads(extension.read_text())
-    assert merged["existing"]["url"] == "https://example.test/a//b"
-    assert "style.bootloader.effect" in merged
-PY
-pass "JSONC menu merge preserves quoted comment markers and existing entries"
+grep -F 'runuser -u "$invoking_user" -- python3 "$root/scripts/menu-extension.py" add' "$root/scripts/install.sh" >/dev/null ||
+  fail "installer does not edit the menu extension as the invoking user"
+grep -F 'runuser -u "$invoking_user" -- python3 "$root/scripts/menu-extension.py" remove' "$root/scripts/uninstall.sh" >/dev/null ||
+  fail "uninstaller does not edit the menu extension as the invoking user"
+if grep -F 'menu_extension' "$root/scripts/common.sh" >/dev/null; then
+  fail "the menu extension is restored from a backup instead of edited in place"
+fi
+if grep -F 'audio-background' "$root/scripts/install.sh" "$root/scripts/common.sh" >/dev/null; then
+  fail "installer overwrites the audio-background plugin's own renderer"
+fi
+pass "menu is edited in place as the user and the audio-background plugin is left alone"
+
+grep -F 'ours_now "$path"' "$root/scripts/uninstall.sh" >/dev/null ||
+  fail "uninstall restores files that changed since the install"
+grep -F 'record_installed_hashes' "$root/scripts/install.sh" >/dev/null || fail "install records what it wrote"
+grep -Fx 'systemctl daemon-reload' "$root/scripts/uninstall.sh" >/dev/null || fail "uninstall leaves systemd with removed units"
+pass "uninstall gives back only files still as the install left them"
+
+grep -F '(( BASHPID == $$ )) || exit "$status"' "$root/scripts/install.sh" >/dev/null ||
+  fail "a failing subshell can roll the install back behind the installer's back"
+grep -F "find /boot/EFI/Linux -maxdepth 1 -type f -name '*.efi' -print0 2>/dev/null" "$root/scripts/install.sh" >/dev/null &&
+  fail "a missing UKI directory fails inside the installer"
+pass "only the installer itself rolls back"

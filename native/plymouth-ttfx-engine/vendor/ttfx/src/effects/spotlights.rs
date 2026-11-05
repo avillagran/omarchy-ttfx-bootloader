@@ -1,6 +1,6 @@
 //! spotlights, ported from effects/effect_spotlights.py.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 use clap::Args;
 
@@ -9,6 +9,7 @@ use crate::effects::common::{
     parse_gradient_direction, parse_gradient_steps, parse_non_negative_float, parse_positive_float,
     parse_positive_float_range, parse_positive_int,
 };
+use crate::engine::active_characters::ActiveCharacters;
 use crate::engine::animation::{Animation, ExistingColorHandling};
 use crate::engine::character::CharId;
 use crate::engine::ctx::{EffectHooks, EngineCtx};
@@ -60,7 +61,8 @@ pub struct SpotlightsConfig {
 
 pub struct Spotlights {
     config: SpotlightsConfig,
-    illuminated_chars: BTreeSet<CharId>,
+    illuminated_chars: ActiveCharacters,
+    illuminated_scratch: ActiveCharacters,
     character_color_map: HashMap<CharId, (ColorPair, ColorPair)>,
     spotlights: Vec<CharId>,
     illuminate_range: i64,
@@ -74,7 +76,8 @@ impl Spotlights {
     pub fn new(config: SpotlightsConfig) -> Self {
         Spotlights {
             config,
-            illuminated_chars: BTreeSet::new(),
+            illuminated_chars: ActiveCharacters::new(),
+            illuminated_scratch: ActiveCharacters::new(),
             character_color_map: HashMap::new(),
             spotlights: Vec::new(),
             illuminate_range: 1,
@@ -88,14 +91,8 @@ impl Spotlights {
     /// SpotlightsIterator._adjust_color_pair_brightness.
     fn adjust_color_pair_brightness(colors: &ColorPair, brightness_factor: f64) -> ColorPair {
         ColorPair::new(
-            colors
-                .fg_color
-                .as_ref()
-                .map(|fg| Animation::adjust_color_brightness(fg, brightness_factor)),
-            colors
-                .bg_color
-                .as_ref()
-                .map(|bg| Animation::adjust_color_brightness(bg, brightness_factor)),
+            colors.fg_color.as_ref().map(|fg| Animation::adjust_color_brightness(fg, brightness_factor)),
+            colors.bg_color.as_ref().map(|bg| Animation::adjust_color_brightness(bg, brightness_factor)),
         )
     }
 
@@ -112,9 +109,7 @@ impl Spotlights {
 
     /// SpotlightsIterator._get_expand_color_override.
     fn get_expand_color_override(&self, ctx: &EngineCtx, id: CharId) -> Option<ColorPair> {
-        if ctx.terminal.config.existing_color_handling != ExistingColorHandling::Dynamic
-            || !self.expanding
-        {
+        if ctx.terminal.config.existing_color_handling != ExistingColorHandling::Dynamic || !self.expanding {
             return None;
         }
         let ch = &ctx.terminal.arena[id.0 as usize];
@@ -128,11 +123,7 @@ impl Spotlights {
     }
 
     /// SpotlightsIterator.make_spotlights.
-    fn make_spotlights(
-        &mut self,
-        ctx: &mut EngineCtx,
-        num_spotlights: i64,
-    ) -> Result<Vec<CharId>, EngineError> {
+    fn make_spotlights(&mut self, ctx: &mut EngineCtx, num_spotlights: i64) -> Result<Vec<CharId>, EngineError> {
         let mut spotlights: Vec<CharId> = Vec::new();
         let minimum_distance = floor_div(ctx.terminal.canvas.right, 4);
         for _ in 0..num_spotlights {
@@ -144,18 +135,14 @@ impl Spotlights {
             let mut last_coord = ctx.terminal.canvas.random_coord(&mut ctx.rng, false, false);
             spotlight_target_coords.push(last_coord);
             for _ in 0..10 {
-                let next_coord =
-                    Self::find_coord_at_minimum_distance(ctx, last_coord, minimum_distance);
+                let next_coord = Self::find_coord_at_minimum_distance(ctx, last_coord, minimum_distance);
                 spotlight_target_coords.push(next_coord);
                 last_coord = next_coord;
             }
 
             let mut paths: Vec<String> = Vec::new();
             for coord in spotlight_target_coords {
-                let speed = ctx.rng.uniform(
-                    self.config.search_speed_range.0,
-                    self.config.search_speed_range.1,
-                );
+                let speed = ctx.rng.uniform(self.config.search_speed_range.0, self.config.search_speed_range.1);
                 let path_id = paths.len().to_string();
                 let path_id = {
                     let ch = &mut ctx.terminal.arena[spotlight.0 as usize];
@@ -175,8 +162,7 @@ impl Spotlights {
                 }
                 paths.push(path_id);
             }
-            ctx.chain_paths(spotlight, &paths, true)
-                .map_err(EngineError::Other)?;
+            ctx.chain_paths(spotlight, &paths, true).map_err(EngineError::Other)?;
 
             let canvas_center = ctx.terminal.canvas.center;
             let ch = &mut ctx.terminal.arena[spotlight.0 as usize];
@@ -195,11 +181,7 @@ impl Spotlights {
     }
 
     /// SpotlightsIterator.find_coord_at_minimum_distance.
-    fn find_coord_at_minimum_distance(
-        ctx: &mut EngineCtx,
-        origin_coord: Coord,
-        minimum_distance: i64,
-    ) -> Coord {
+    fn find_coord_at_minimum_distance(ctx: &mut EngineCtx, origin_coord: Coord, minimum_distance: i64) -> Coord {
         loop {
             let coord = ctx.terminal.canvas.random_coord(&mut ctx.rng, false, false);
             let distance = geometry::find_length_of_line(origin_coord, coord, false);
@@ -211,52 +193,36 @@ impl Spotlights {
 
     /// SpotlightsIterator.illuminate_chars.
     fn illuminate_chars(&mut self, ctx: &mut EngineCtx, range_: i64) {
-        let mut coords_in_range: Vec<Coord> = Vec::new();
+        let mut chars_in_range = std::mem::take(&mut self.illuminated_scratch);
+        chars_in_range.clear();
         for &spotlight in &self.spotlights {
-            let current_coord = ctx.terminal.arena[spotlight.0 as usize]
-                .motion
-                .current_coord;
-            coords_in_range.extend(geometry::find_coords_in_circle(current_coord, range_));
-        }
-        let mut chars_in_range: BTreeSet<CharId> = BTreeSet::new();
-        for coord in coords_in_range {
-            if let Some(id) = ctx.terminal.get_character_by_input_coord(coord) {
-                if Self::is_spotlightable(ctx, id) {
-                    chars_in_range.insert(id);
+            let current_coord = ctx.terminal.arena[spotlight.0 as usize].motion.current_coord;
+            for coord in geometry::coords_in_circle(current_coord, range_) {
+                if let Some(id) = ctx.terminal.get_character_by_input_coord(coord) {
+                    if Self::is_spotlightable(ctx, id) {
+                        chars_in_range.insert(id);
+                    }
                 }
             }
         }
-        let chars_no_longer_in_range: Vec<CharId> = self
-            .illuminated_chars
-            .difference(&chars_in_range)
-            .copied()
-            .collect();
-        for id in chars_no_longer_in_range {
+        for id in self.illuminated_chars.iter().filter(|id| !chars_in_range.contains(id)) {
             let expand_override = self.get_expand_color_override(ctx, id);
             let colors = match expand_override {
                 None => self.character_color_map.get(&id).unwrap().1.clone(),
                 Some(overridden) => overridden,
             };
             let ch = &mut ctx.terminal.arena[id.0 as usize];
-            let input_symbol = ch.input_symbol.clone();
             let uses_pre = ch.uses_input_preexisting_colors;
-            ch.animation.set_appearance(
-                &input_symbol,
-                uses_pre,
-                Some(&input_symbol.clone()),
-                Some(colors),
-            );
+            ch.animation.set_appearance(&ch.input_symbol, uses_pre, None, Some(colors));
         }
 
-        for &id in &chars_in_range {
+        for id in &chars_in_range {
             let input_coord = ctx.terminal.arena[id.0 as usize].input_coord;
             let distance = self
                 .spotlights
                 .iter()
                 .map(|&spotlight| {
-                    let current_coord = ctx.terminal.arena[spotlight.0 as usize]
-                        .motion
-                        .current_coord;
+                    let current_coord = ctx.terminal.arena[spotlight.0 as usize].motion.current_coord;
                     geometry::find_length_of_line(current_coord, input_coord, true)
                 })
                 .fold(f64::INFINITY, f64::min);
@@ -279,27 +245,15 @@ impl Spotlights {
                 Some(overridden) => overridden,
             };
             let ch = &mut ctx.terminal.arena[id.0 as usize];
-            let input_symbol = ch.input_symbol.clone();
             let uses_pre = ch.uses_input_preexisting_colors;
-            ch.animation.set_appearance(
-                &input_symbol,
-                uses_pre,
-                Some(&input_symbol.clone()),
-                Some(colors),
-            );
+            ch.animation.set_appearance(&ch.input_symbol, uses_pre, None, Some(colors));
         }
-        self.illuminated_chars = chars_in_range;
+        self.illuminated_scratch = std::mem::replace(&mut self.illuminated_chars, chars_in_range);
     }
 }
 
 impl EffectHooks for Spotlights {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Spotlights {
@@ -307,30 +261,21 @@ impl Effect for Spotlights {
         // SpotlightsIterator.DYNAMIC_NEUTRAL_GRAY
         let dynamic_neutral_gray = Color::from_hex("#808080").unwrap();
         self.spotlights = self.make_spotlights(ctx, self.config.spotlight_count)?;
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let (input_coord, input_fg, input_bg) = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
-                (
-                    ch.input_coord,
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                )
+                (ch.input_coord, ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
             };
             let (bright_pair, dark_pair);
             if dynamic {
@@ -341,43 +286,27 @@ impl Effect for Spotlights {
                     }
                     bright_pair = ColorPair::new(bright_fg.clone(), input_bg.clone());
                     dark_pair = ColorPair::new(
-                        bright_fg
-                            .as_ref()
-                            .map(|fg| Animation::adjust_color_brightness(fg, 0.2)),
-                        input_bg
-                            .as_ref()
-                            .map(|bg| Animation::adjust_color_brightness(bg, 0.2)),
+                        bright_fg.as_ref().map(|fg| Animation::adjust_color_brightness(fg, 0.2)),
+                        input_bg.as_ref().map(|bg| Animation::adjust_color_brightness(bg, 0.2)),
                     );
                 } else {
                     bright_pair = ColorPair::new(Some(dynamic_neutral_gray.clone()), None);
                     dark_pair = ColorPair::new(
-                        Some(Animation::adjust_color_brightness(
-                            &dynamic_neutral_gray,
-                            0.2,
-                        )),
+                        Some(Animation::adjust_color_brightness(&dynamic_neutral_gray, 0.2)),
                         None,
                     );
                 }
             } else {
                 let color_bright = final_gradient_mapping.get(&input_coord).unwrap().clone();
-                dark_pair = ColorPair::new(
-                    Some(Animation::adjust_color_brightness(&color_bright, 0.2)),
-                    None,
-                );
+                dark_pair = ColorPair::new(Some(Animation::adjust_color_brightness(&color_bright, 0.2)), None);
                 bright_pair = ColorPair::new(Some(color_bright), None);
             }
             ctx.terminal.set_character_visibility(id, true);
-            self.character_color_map
-                .insert(id, (bright_pair, dark_pair.clone()));
+            self.character_color_map.insert(id, (bright_pair, dark_pair.clone()));
             let ch = &mut ctx.terminal.arena[id.0 as usize];
             let input_symbol = ch.input_symbol.clone();
             let uses_pre = ch.uses_input_preexisting_colors;
-            ch.animation.set_appearance(
-                &input_symbol,
-                uses_pre,
-                Some(&input_symbol.clone()),
-                Some(dark_pair),
-            );
+            ch.animation.set_appearance(&input_symbol, uses_pre, Some(&input_symbol.clone()), Some(dark_pair));
         }
         let smallest_dimension = std::cmp::min(ctx.terminal.canvas.right, ctx.terminal.canvas.top);
         // int(min(smallest // ratio, smallest)) — float floor division then truncation
@@ -410,21 +339,17 @@ impl Effect for Spotlights {
                     self.searching = false;
                 }
             }
-            if !self.spotlights.iter().any(|&spotlight| {
-                ctx.terminal.arena[spotlight.0 as usize]
-                    .motion
-                    .active_path
-                    .is_some()
-            }) {
+            if !self
+                .spotlights
+                .iter()
+                .any(|&spotlight| ctx.terminal.arena[spotlight.0 as usize].motion.active_path.is_some())
+            {
                 while self.spotlights.len() > 1 {
                     self.spotlights.pop();
                 }
                 self.expanding = true;
                 self.illuminate_range += 1;
-                let limit = (std::cmp::max(ctx.terminal.canvas.right, ctx.terminal.canvas.top)
-                    as f64
-                    / 1.5)
-                    .floor();
+                let limit = (std::cmp::max(ctx.terminal.canvas.right, ctx.terminal.canvas.top) as f64 / 1.5).floor();
                 if self.illuminate_range as f64 > limit {
                     self.complete = true;
                 }

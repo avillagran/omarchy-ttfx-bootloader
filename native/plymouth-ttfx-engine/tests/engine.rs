@@ -3,6 +3,11 @@ use ttfx::cli::Cli;
 use ttfx_plymouth::{Engine, StepOutcome};
 
 #[test]
+fn embedded_dependency_is_ttfx_0_5_1() {
+    assert!(include_str!("../vendor/ttfx/Cargo.toml").contains("version = \"0.5.1\""));
+}
+
+#[test]
 fn creates_real_print_effect_with_a_full_structured_frame() {
     let engine = Engine::create("print", 0x1234, "Héllo", 12, 3, 60).unwrap();
 
@@ -204,8 +209,21 @@ fn every_exposed_effect_builds_and_steps_at_the_early_boot_limit() {
 
     let input = include_str!("../../plymouth-ttfx-plugin/embedded-logo-v2.txt");
     for effect in effects {
-        let engine = Engine::create(effect, 7, input, 162, 20, 240)
+        let mut engine = Engine::create(effect, 7, input, 162, 20, 240)
             .unwrap_or_else(|error| panic!("{effect} failed to build: {error:?}"));
         assert_eq!(engine.cells().len(), 162 * 20, "{effect}");
+        let first = engine.cells().to_vec();
+        for _ in 0..3 {
+            engine
+                .step()
+                .unwrap_or_else(|error| panic!("{effect} failed to step: {error:?}"));
+            assert_eq!(engine.cells().len(), 162 * 20, "{effect}");
+        }
+        engine.reset().unwrap();
+        assert_eq!(
+            engine.cells(),
+            first,
+            "{effect} reset must be deterministic"
+        );
     }
 }

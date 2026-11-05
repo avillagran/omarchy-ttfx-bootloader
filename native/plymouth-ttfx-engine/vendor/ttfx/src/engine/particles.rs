@@ -49,11 +49,7 @@ pub struct ParticlePool {
 impl ParticlePool {
     /// ParticlePool.__init__ (without preallocation — call `preallocate` after
     /// construction so the initializer closure can run against ctx).
-    pub fn new(
-        symbols: Vec<String>,
-        max_size: Option<usize>,
-        coord: Option<Coord>,
-    ) -> Result<Self, String> {
+    pub fn new(symbols: Vec<String>, max_size: Option<usize>, coord: Option<Coord>) -> Result<Self, String> {
         if symbols.is_empty() {
             return Err("ParticlePool requires at least one symbol.".to_string());
         }
@@ -131,8 +127,7 @@ impl ParticlePool {
         if reset.reset_appearance {
             let input_symbol = ch.input_symbol.clone();
             let uses = ch.uses_input_preexisting_colors;
-            ch.animation
-                .set_appearance(&input_symbol, uses, Some(&input_symbol.clone()), None);
+            ch.animation.set_appearance(&input_symbol, uses, Some(&input_symbol.clone()), None);
         }
     }
 
@@ -150,8 +145,7 @@ impl ParticlePool {
                 let ch = &mut ctx.terminal.arena[particle.0 as usize];
                 ch.input_symbol = symbol.to_string();
                 let uses = ch.uses_input_preexisting_colors;
-                ch.animation
-                    .set_appearance(symbol, uses, Some(symbol), None);
+                ch.animation.set_appearance(symbol, uses, Some(symbol), None);
             }
             return Some(particle);
         }
@@ -178,9 +172,7 @@ impl ParticlePool {
         on_emit: impl FnOnce(&mut EngineCtx, CharId),
     ) -> Option<CharId> {
         let particle = self.acquire(ctx, symbol, reset, initializer)?;
-        ctx.terminal.arena[particle.0 as usize]
-            .motion
-            .set_coordinate(origin);
+        ctx.terminal.arena[particle.0 as usize].motion.set_coordinate(origin);
         on_emit(ctx, particle);
         ctx.terminal.set_character_visibility(particle, visible);
         ctx.active_characters.insert(particle);

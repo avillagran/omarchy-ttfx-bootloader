@@ -17,8 +17,8 @@ use crate::engine::animation::SyncMetric;
 use crate::engine::character::CharId;
 use crate::engine::error::EngineError;
 use crate::engine::events::{CallerKey, CallerRef, EffectCallback, Event, EventAction};
-use crate::engine::motion::Segment;
 use crate::engine::motion::Waypoint;
+use crate::engine::motion::{Path, Segment};
 use crate::engine::terminal::{Terminal, TerminalConfig};
 use crate::utils::geometry::{self, Coord};
 use crate::utils::pycompat::round_half_even;
@@ -122,12 +122,11 @@ pub struct EngineCtx {
     pub active_characters: ActiveCharacters,
     active_character_scratch: Vec<CharId>,
     pub preexisting_colors_present: bool,
-    /// Embedding-only final text layout. Ordinary CLI and transient gradients
-    /// retain their authored directions and smooth spectra by default.
+    /// Embedding-only final text layout; CLI gradients remain unchanged.
     pub final_text_bands: bool,
+    structured_output: bool,
     /// When Some, every event emission appends a trace line (test harness).
     pub event_log: Option<Vec<String>>,
-    structured_output: bool,
 }
 
 impl EngineCtx {
@@ -150,8 +149,8 @@ impl EngineCtx {
             active_character_scratch: Vec::new(),
             preexisting_colors_present,
             final_text_bands: false,
-            event_log: None,
             structured_output: false,
+            event_log: None,
         })
     }
 
@@ -209,7 +208,7 @@ impl EngineCtx {
         event: Event,
         caller: CallerRef<'_>,
     ) {
-        if self.event_log.is_some() {
+        if let Some(log) = self.event_log.as_mut() {
             let character_id = self.terminal.arena[id.0 as usize].character_id;
             let event_name = match event {
                 Event::SegmentEntered => "SEGMENT_ENTERED",
@@ -225,7 +224,7 @@ impl EngineCtx {
                 CallerRef::Waypoint(wp) => format!("wp:{}", wp.waypoint_id),
                 CallerRef::Scene(sid) => format!("scene:{sid}"),
             };
-            self.event_log.as_mut().unwrap().push(format!(
+            log.push(format!(
                 "EVENT char={character_id} {event_name} caller={caller_label}"
             ));
         }
@@ -349,25 +348,22 @@ impl EngineCtx {
             }
             None => geometry::find_length_of_line(current_coord, first_waypoint.coord, true),
         };
-        let new_origin_segment = Segment::new(
-            Waypoint {
-                waypoint_id: ORIGIN_WAYPOINT_ID.with(Rc::clone),
-                coord: current_coord,
-                bezier_control: None,
-            },
-            first_waypoint,
-            distance_to_first_waypoint,
-        );
+        let new_origin_segment = Segment::new(Path::ORIGIN, 0, distance_to_first_waypoint);
         let layer = {
             let ch = &mut self.terminal.arena[id.0 as usize];
             ch.motion.active_path = ch.motion.paths.shared_key(path_id);
             let path = ch.motion.paths.get_mut(path_id).unwrap();
+            path.origin_waypoint = Some(Waypoint {
+                waypoint_id: ORIGIN_WAYPOINT_ID.with(Rc::clone),
+                coord: current_coord,
+                bezier_control: None,
+            });
             path.total_distance += distance_to_first_waypoint;
             if let Some(origin) = &path.origin_segment {
                 path.total_distance -= origin.distance;
-                path.segments[0] = new_origin_segment.clone();
+                path.segments[0] = new_origin_segment;
             } else {
-                path.segments.insert(0, new_origin_segment.clone());
+                path.segments.insert(0, new_origin_segment);
             }
             path.origin_segment = Some(new_origin_segment);
             path.current_step = 0;
@@ -421,7 +417,9 @@ impl EngineCtx {
         let mut distance_to_travel = {
             let p = path_mut!();
             if p.max_steps == 0 || p.current_step >= p.max_steps || p.total_distance == 0.0 {
-                return p.segments.last().expect("path has no segments").end.coord;
+                return p
+                    .waypoint_at(p.segments.last().expect("path has no segments").end)
+                    .coord;
             }
             p.current_step += 1;
             let ratio = p.current_step as f64 / p.max_steps as f64;
@@ -453,7 +451,10 @@ impl EngineCtx {
                 active_segment_index = Some(i);
                 if !enter_triggered {
                     if self.observes_event(id, Event::SegmentEntered) {
-                        let seg_end_key = path!().segments[i].end.key();
+                        let seg_end_key = {
+                            let p = path!();
+                            p.waypoint_at(p.segments[i].end).key()
+                        };
                         path_mut!().segments[i].enter_event_triggered = true;
                         self.handle_event(
                             hooks,
@@ -477,7 +478,10 @@ impl EngineCtx {
                     seg.enter_event_triggered = true;
                     seg.exit_event_triggered = true;
                 } else {
-                    let seg_end_key = path!().segments[i].end.key();
+                    let seg_end_key = {
+                        let p = path!();
+                        p.waypoint_at(p.segments[i].end).key()
+                    };
                     if !enter_triggered {
                         path_mut!().segments[i].enter_event_triggered = true;
                         self.handle_event(
@@ -524,11 +528,13 @@ impl EngineCtx {
         } else {
             (distance_to_travel / seg_distance).min(1.0)
         };
-        match &seg.end.bezier_control {
+        let start = p.waypoint_at(seg.start);
+        let end = p.waypoint_at(seg.end);
+        match &end.bezier_control {
             Some(control) => {
-                geometry::find_coord_on_bezier_curve(seg.start.coord, control, seg.end.coord, t)
+                geometry::find_coord_on_bezier_curve(start.coord, control, end.coord, t)
             }
-            None => geometry::find_coord_on_line(seg.start.coord, seg.end.coord, t),
+            None => geometry::find_coord_on_line(start.coord, end.coord, t),
         }
     }
 
@@ -712,10 +718,10 @@ impl EngineCtx {
             (scene.sync, scene.ease)
         };
 
-        if sync.is_some() {
-            self.step_synced_scene(id, scene_slot, sync.unwrap());
-        } else if ease.is_some() {
-            self.step_eased_scene(id, scene_slot, ease.unwrap());
+        if let Some(sync) = sync {
+            self.step_synced_scene(id, scene_slot, sync);
+        } else if let Some(ease) = ease {
+            self.step_eased_scene(id, scene_slot, ease);
         } else {
             let ch = &mut self.terminal.arena[id.0 as usize];
             let visual = ch.animation.scenes.at_mut(scene_slot).get_next_visual();
@@ -745,10 +751,8 @@ impl EngineCtx {
             None => {
                 // no active path: jump to final frame and force-complete
                 let last = *scene.frames.back().unwrap();
-                ch.animation.current_character_visual =
-                    scene.all_frames[last].character_visual.clone();
-                let drained: Vec<usize> = scene.frames.drain(..).collect();
-                scene.played_frames.extend(drained);
+                ch.animation.current_character_visual = scene.all_frames[last].character_visual;
+                scene.played_frames.append(&mut scene.frames);
             }
             Some((current_step, max_steps, total_distance, last_distance_reached)) => {
                 let final_frame_index = scene.frames.len() as i64 - 1;
@@ -765,8 +769,7 @@ impl EngineCtx {
                     .min(final_frame_index)
                     .max(0);
                 let frame = scene.frames[frame_index as usize];
-                ch.animation.current_character_visual =
-                    scene.all_frames[frame].character_visual.clone();
+                ch.animation.current_character_visual = scene.all_frames[frame].character_visual;
             }
         }
     }
@@ -787,15 +790,14 @@ impl EngineCtx {
             .min(final_frame_index)
             .max(0);
         let frame = scene.frame_index_map[frame_index as usize];
-        ch.animation.current_character_visual = scene.all_frames[frame].character_visual.clone();
+        ch.animation.current_character_visual = scene.all_frames[frame].character_visual;
 
         scene.easing_current_step += 1;
         if scene.easing_current_step == scene.easing_total_steps {
             if scene.is_looping {
                 scene.easing_current_step = 0;
             } else {
-                let drained: Vec<usize> = scene.frames.drain(..).collect();
-                scene.played_frames.extend(drained);
+                scene.played_frames.append(&mut scene.frames);
             }
         }
     }

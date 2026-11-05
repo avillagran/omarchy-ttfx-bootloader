@@ -66,20 +66,11 @@ pub struct ErrorCorrect {
 
 impl ErrorCorrect {
     pub fn new(config: ErrorCorrectConfig) -> Self {
-        ErrorCorrect {
-            config,
-            swapped: Vec::new(),
-            swap_delay: 0,
-            character_final_color_map: HashMap::new(),
-        }
+        ErrorCorrect { config, swapped: Vec::new(), swap_delay: 0, character_final_color_map: HashMap::new() }
     }
 
     /// ErrorCorrectIterator._get_dynamic_final_scene.
-    fn get_dynamic_final_scene(
-        &self,
-        ctx: &mut EngineCtx,
-        id: CharId,
-    ) -> Result<String, EngineError> {
+    fn get_dynamic_final_scene(&self, ctx: &mut EngineCtx, id: CharId) -> Result<String, EngineError> {
         let (input_symbol, input_fg, input_bg, uses_pre) = {
             let ch = &ctx.terminal.arena[id.0 as usize];
             (
@@ -111,23 +102,11 @@ impl ErrorCorrect {
         let scene = ch.animation.scenes.get_mut(&final_scene).unwrap();
         if fg_gradient.is_some() || bg_gradient.is_some() {
             scene
-                .apply_gradient_to_symbols(
-                    &[input_symbol.clone()],
-                    3,
-                    fg_gradient.as_ref(),
-                    bg_gradient.as_ref(),
-                )
+                .apply_gradient_to_symbols(&[input_symbol.clone()], 3, fg_gradient.as_ref(), bg_gradient.as_ref())
                 .map_err(EngineError::Other)?;
         } else {
             scene
-                .add_frame(
-                    &input_symbol,
-                    3,
-                    VisualParams {
-                        colors: Some(ColorPair::default()),
-                        ..Default::default()
-                    },
-                )
+                .add_frame(&input_symbol, 3, VisualParams { colors: Some(ColorPair::default()), ..Default::default() })
                 .map_err(EngineError::Other)?;
         }
         Ok(final_scene)
@@ -160,10 +139,7 @@ impl ErrorCorrect {
                         block,
                         3,
                         VisualParams {
-                            colors: Some(ColorPair::new(
-                                Some(self.config.error_color.clone()),
-                                None,
-                            )),
+                            colors: Some(ColorPair::new(Some(self.config.error_color.clone()), None)),
                             ..Default::default()
                         },
                     )
@@ -181,10 +157,7 @@ impl ErrorCorrect {
                             block,
                             3,
                             VisualParams {
-                                colors: Some(ColorPair::new(
-                                    Some(self.config.correct_color.clone()),
-                                    None,
-                                )),
+                                colors: Some(ColorPair::new(Some(self.config.correct_color.clone()), None)),
                                 ..Default::default()
                             },
                         )
@@ -194,10 +167,7 @@ impl ErrorCorrect {
                     .add_frame(
                         BLOCK_WIPE_END[BLOCK_WIPE_END.len() - 1],
                         3,
-                        VisualParams {
-                            colors: Some(final_colors),
-                            ..Default::default()
-                        },
+                        VisualParams { colors: Some(final_colors), ..Default::default() },
                     )
                     .map_err(EngineError::Other)?;
             } else {
@@ -207,10 +177,7 @@ impl ErrorCorrect {
                             block,
                             3,
                             VisualParams {
-                                colors: Some(ColorPair::new(
-                                    Some(self.config.correct_color.clone()),
-                                    None,
-                                )),
+                                colors: Some(ColorPair::new(Some(self.config.correct_color.clone()), None)),
                                 ..Default::default()
                             },
                         )
@@ -247,10 +214,7 @@ impl ErrorCorrect {
                         "▓",
                         3,
                         VisualParams {
-                            colors: Some(ColorPair::new(
-                                Some(self.config.error_color.clone()),
-                                None,
-                            )),
+                            colors: Some(ColorPair::new(Some(self.config.error_color.clone()), None)),
                             ..Default::default()
                         },
                     )
@@ -260,10 +224,7 @@ impl ErrorCorrect {
                         &input_symbol,
                         3,
                         VisualParams {
-                            colors: Some(ColorPair::new(
-                                Some(Color::from_hex("ffffff").unwrap()),
-                                None,
-                            )),
+                            colors: Some(ColorPair::new(Some(Color::from_hex("ffffff").unwrap()), None)),
                             ..Default::default()
                         },
                     )
@@ -272,9 +233,7 @@ impl ErrorCorrect {
         }
         let correcting_scene = {
             let ch = &mut ctx.terminal.arena[id.0 as usize];
-            let scene_id =
-                ch.animation
-                    .new_scene(false, Some(SyncMetric::Distance), None, "", uses_pre);
+            let scene_id = ch.animation.new_scene(false, Some(SyncMetric::Distance), None, "", uses_pre);
             ch.animation
                 .scenes
                 .get_mut(&scene_id)
@@ -296,12 +255,7 @@ impl ErrorCorrect {
                 .scenes
                 .get_mut(&scene_id)
                 .unwrap()
-                .apply_gradient_to_symbols(
-                    &[input_symbol.clone()],
-                    3,
-                    Some(&char_final_gradient),
-                    None,
-                )
+                .apply_gradient_to_symbols(&[input_symbol.clone()], 3, Some(&char_final_gradient), None)
                 .map_err(EngineError::Other)?;
             scene_id
         };
@@ -359,32 +313,18 @@ impl ErrorCorrect {
 }
 
 fn final_colors_fg(map: &HashMap<CharId, ColorPair>, id: CharId) -> Color {
-    map.get(&id)
-        .unwrap()
-        .fg_color
-        .clone()
-        .expect("gradient mapping fg")
+    map.get(&id).unwrap().fg_color.clone().expect("gradient mapping fg")
 }
 
 impl EffectHooks for ErrorCorrect {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for ErrorCorrect {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -392,22 +332,15 @@ impl Effect for ErrorCorrect {
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let final_colors = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
                 if dynamic {
-                    ColorPair::new(
-                        ch.animation.input_fg_color.clone(),
-                        ch.animation.input_bg_color.clone(),
-                    )
+                    ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
                 } else {
-                    ColorPair::new(
-                        Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()),
-                        None,
-                    )
+                    ColorPair::new(Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()), None)
                 }
             };
             self.character_final_color_map.insert(id, final_colors);
@@ -423,14 +356,7 @@ impl Effect for ErrorCorrect {
                     .scenes
                     .get_mut(&scene_id)
                     .unwrap()
-                    .add_frame(
-                        &input_symbol,
-                        1,
-                        VisualParams {
-                            colors: Some(spawn_colors),
-                            ..Default::default()
-                        },
-                    )
+                    .add_frame(&input_symbol, 1, VisualParams { colors: Some(spawn_colors), ..Default::default() })
                     .map_err(EngineError::Other)?;
                 scene_id
             };
@@ -440,10 +366,7 @@ impl Effect for ErrorCorrect {
 
         let mut all_characters: Vec<CharId> = ctx.terminal.input_characters.clone();
         let correcting_gradient = Gradient::with_steps(
-            &[
-                self.config.error_color.clone(),
-                self.config.correct_color.clone(),
-            ],
+            &[self.config.error_color.clone(), self.config.correct_color.clone()],
             10,
             false,
         )
@@ -465,14 +388,7 @@ impl Effect for ErrorCorrect {
                 ch.motion.set_coordinate(char2_input_coord);
                 let path_id = ch
                     .motion
-                    .new_path(
-                        self.config.movement_speed,
-                        None,
-                        None,
-                        0,
-                        false,
-                        "input_coord",
-                    )
+                    .new_path(self.config.movement_speed, None, None, 0, false, "input_coord")
                     .map_err(EngineError::Other)?;
                 ch.motion
                     .paths
@@ -486,14 +402,7 @@ impl Effect for ErrorCorrect {
                 ch.motion.set_coordinate(char1_input_coord);
                 let path_id = ch
                     .motion
-                    .new_path(
-                        self.config.movement_speed,
-                        None,
-                        None,
-                        0,
-                        false,
-                        "input_coord",
-                    )
+                    .new_path(self.config.movement_speed, None, None, 0, false, "input_coord")
                     .map_err(EngineError::Other)?;
                 ch.motion
                     .paths

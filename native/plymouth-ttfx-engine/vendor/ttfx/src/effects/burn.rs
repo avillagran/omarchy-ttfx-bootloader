@@ -14,9 +14,7 @@ use std::collections::HashMap;
 use clap::Args;
 
 use crate::cli::parse_color;
-use crate::effects::common::{
-    parse_gradient_direction, parse_gradient_steps, parse_non_negative_ratio,
-};
+use crate::effects::common::{parse_gradient_direction, parse_gradient_steps, parse_non_negative_ratio};
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
 use crate::engine::ctx::{EffectHooks, EngineCtx};
@@ -116,10 +114,7 @@ impl Burn {
             (ch.input_symbol.clone(), ch.uses_input_preexisting_colors)
         };
         let gradient = Gradient::with_steps(
-            &[
-                Color::from_hex("504F4F").unwrap(),
-                Color::from_hex("C7C7C7").unwrap(),
-            ],
+            &[Color::from_hex("504F4F").unwrap(), Color::from_hex("C7C7C7").unwrap()],
             9,
             false,
         )
@@ -132,10 +127,7 @@ impl Burn {
                 .add_frame(
                     &input_symbol,
                     10,
-                    VisualParams {
-                        colors: Some(ColorPair::new(Some(color.clone()), None)),
-                        ..Default::default()
-                    },
+                    VisualParams { colors: Some(ColorPair::new(Some(color.clone()), None)), ..Default::default() },
                 )
                 .expect("smoke frame");
         }
@@ -157,62 +149,49 @@ impl Burn {
         // for which smoke particles never register actions, so CB_RECLAIM_SMOKE
         // cannot dispatch while the pool is out.
         let mut pool = self.smoke_particles.take().expect("smoke pool");
-        pool.emit(
-            ctx,
-            origin,
-            None,
-            true,
-            reset,
-            Self::initialize_smoke,
-            |ctx, next_particle| {
-                // on_emit_smoke
-                ctx.terminal.arena[next_particle.0 as usize]
-                    .animation
-                    .scenes
-                    .get_mut("smoke")
-                    .expect("smoke scene")
-                    .reset_scene();
-                let smoke_path = ctx.terminal.arena[next_particle.0 as usize]
-                    .motion
-                    .new_path(0.5, None, None, 0, false, "")
-                    .expect("smoke path");
-                let rise_target_coord = Coord::new(
-                    ctx.rng.randint(origin.column - 4, origin.column + 4),
-                    ctx.terminal.canvas.top + 1,
-                );
-                ctx.terminal.arena[next_particle.0 as usize]
-                    .motion
-                    .paths
-                    .get_mut(&smoke_path)
-                    .unwrap()
-                    .new_waypoint(rise_target_coord, None, "")
-                    .expect("smoke waypoint");
-                ctx.activate_path(self, next_particle, &smoke_path);
-                ctx.activate_scene(self, next_particle, "smoke");
-                // ParticlePool.reclaim_on_event(next_particle, caller="smoke")
-                ctx.register_event(
-                    next_particle,
-                    Event::SceneComplete,
-                    CallerKey::Scene("smoke".to_string()),
-                    EventAction::Callback(EffectCallback {
-                        id: CB_RECLAIM_SMOKE,
-                        args: vec![CallbackValue::Int(emission_id)],
-                    }),
-                )
-                .expect("register reclaim");
-            },
-        );
+        pool.emit(ctx, origin, None, true, reset, Self::initialize_smoke, |ctx, next_particle| {
+            // on_emit_smoke
+            ctx.terminal.arena[next_particle.0 as usize]
+                .animation
+                .scenes
+                .get_mut("smoke")
+                .expect("smoke scene")
+                .reset_scene();
+            let smoke_path = ctx.terminal.arena[next_particle.0 as usize]
+                .motion
+                .new_path(0.5, None, None, 0, false, "")
+                .expect("smoke path");
+            let rise_target_coord = Coord::new(
+                ctx.rng.randint(origin.column - 4, origin.column + 4),
+                ctx.terminal.canvas.top + 1,
+            );
+            ctx.terminal.arena[next_particle.0 as usize]
+                .motion
+                .paths
+                .get_mut(&smoke_path)
+                .unwrap()
+                .new_waypoint(rise_target_coord, None, "")
+                .expect("smoke waypoint");
+            ctx.activate_path(self, next_particle, &smoke_path);
+            ctx.activate_scene(self, next_particle, "smoke");
+            // ParticlePool.reclaim_on_event(next_particle, caller="smoke")
+            ctx.register_event(
+                next_particle,
+                Event::SceneComplete,
+                CallerKey::Scene("smoke".to_string()),
+                EventAction::Callback(EffectCallback {
+                    id: CB_RECLAIM_SMOKE,
+                    args: vec![CallbackValue::Int(emission_id)],
+                }),
+            )
+            .expect("register reclaim");
+        });
         self.smoke_particles = Some(pool);
     }
 }
 
 impl EffectHooks for Burn {
-    fn dispatch_callback(
-        &mut self,
-        ctx: &mut EngineCtx,
-        character: CharId,
-        callback: &EffectCallback,
-    ) {
+    fn dispatch_callback(&mut self, ctx: &mut EngineCtx, character: CharId, callback: &EffectCallback) {
         match callback.id {
             CB_EMIT_SMOKE => {
                 let origin = ctx.terminal.arena[character.0 as usize].input_coord;
@@ -220,10 +199,7 @@ impl EffectHooks for Burn {
             }
             CB_RECLAIM_SMOKE => {
                 // reclaim(completed_character, hide=True, deactivate=True)
-                self.smoke_particles
-                    .as_mut()
-                    .expect("smoke pool")
-                    .reclaim(ctx, character, true, true);
+                self.smoke_particles.as_mut().expect("smoke pool").reclaim(ctx, character, true, true);
             }
             _ => {}
         }
@@ -235,45 +211,30 @@ impl Effect for Burn {
         // BurnIterator.__init__ order: PrimsSimple (random starting coord),
         // then the pool preallocation (2000 choice() draws + initializer each).
         let mut algo = PrimsSimple::new(ctx, None, true).map_err(EngineError::Other)?;
-        let mut pool = ParticlePool::new(
-            SMOKE_SYMBOLS.iter().map(|s| s.to_string()).collect(),
-            Some(2000),
-            None,
-        )
-        .map_err(EngineError::Other)?;
-        pool.preallocate(ctx, 2000, Self::initialize_smoke)
-            .map_err(EngineError::Other)?;
+        let mut pool =
+            ParticlePool::new(SMOKE_SYMBOLS.iter().map(|s| s.to_string()).collect(), Some(2000), None)
+                .map_err(EngineError::Other)?;
+        pool.preallocate(ctx, 2000, Self::initialize_smoke).map_err(EngineError::Other)?;
         self.smoke_particles = Some(pool);
 
         // BurnIterator.build()
         let burn_char_order: Vec<String> = BURN_CHAR_ORDER.iter().map(|s| s.to_string()).collect();
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let coord = ctx.terminal.arena[id.0 as usize].input_coord;
-            self.character_final_color_map.insert(
-                id,
-                final_gradient_mapping
-                    .get(&coord)
-                    .expect("gradient mapping")
-                    .clone(),
-            );
+            self.character_final_color_map
+                .insert(id, final_gradient_mapping.get(&coord).expect("gradient mapping").clone());
         }
-        let fire_gradient = Gradient::with_steps(&self.config.burn_colors, 10, false)
-            .map_err(EngineError::Other)?;
+        let fire_gradient = Gradient::with_steps(&self.config.burn_colors, 10, false).map_err(EngineError::Other)?;
 
         while !algo.complete {
             algo.step(ctx);
@@ -282,8 +243,7 @@ impl Effect for Burn {
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             ctx.terminal.set_character_visibility(id, true);
@@ -302,10 +262,7 @@ impl Effect for Burn {
                     &input_symbol,
                     uses_pre,
                     Some(&input_symbol),
-                    Some(ColorPair::new(
-                        Some(self.config.starting_color.clone()),
-                        None,
-                    )),
+                    Some(ColorPair::new(Some(self.config.starting_color.clone()), None)),
                 );
             }
             let burn_scn = {
@@ -323,11 +280,7 @@ impl Effect for Burn {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 ch.animation.new_scene(false, None, None, "", uses_pre)
             };
-            let fire_last = fire_gradient
-                .spectrum
-                .last()
-                .expect("fire gradient spectrum")
-                .clone();
+            let fire_last = fire_gradient.spectrum.last().expect("fire gradient spectrum").clone();
             if dynamic {
                 let fg_gradient = match &input_fg {
                     Some(fg) => Some(
@@ -359,17 +312,14 @@ impl Effect for Burn {
                         .add_frame(
                             &input_symbol,
                             4,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
             } else {
                 let final_color = self.character_final_color_map.get(&id).unwrap().clone();
-                let char_gradient = Gradient::with_steps(&[fire_last, final_color], 8, false)
-                    .map_err(EngineError::Other)?;
+                let char_gradient =
+                    Gradient::with_steps(&[fire_last, final_color], 8, false).map_err(EngineError::Other)?;
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 let scene = ch.animation.scenes.get_mut(&final_color_scn).unwrap();
                 for color in &char_gradient.spectrum {
@@ -396,10 +346,7 @@ impl Effect for Burn {
                 id,
                 Event::SceneComplete,
                 CallerKey::Scene(burn_scn),
-                EventAction::Callback(EffectCallback {
-                    id: CB_EMIT_SMOKE,
-                    args: Vec::new(),
-                }),
+                EventAction::Callback(EffectCallback { id: CB_EMIT_SMOKE, args: Vec::new() }),
             )
             .map_err(EngineError::Other)?;
         }

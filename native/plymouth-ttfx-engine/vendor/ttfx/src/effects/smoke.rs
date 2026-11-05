@@ -69,22 +69,12 @@ pub struct Smoke {
 
 impl Smoke {
     pub fn new(config: SmokeConfig) -> Self {
-        Smoke {
-            config,
-            character_final_color_map: HashMap::new(),
-            fill_alg: None,
-        }
+        Smoke { config, character_final_color_map: HashMap::new(), fill_alg: None }
     }
 }
 
 impl EffectHooks for Smoke {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Smoke {
@@ -94,24 +84,16 @@ impl Effect for Smoke {
         // (random coord lookup; a failed lookup falls back to BreadthFirst's
         // own draw, exactly like Python's `starting_char or ...`).
         let limit_to_text_boundary = !self.config.use_whole_canvas;
-        let mut gen_alg =
-            PrimsWeighted::new(ctx, None, limit_to_text_boundary).map_err(EngineError::Other)?;
-        let fill_start_coord =
-            ctx.terminal
-                .canvas
-                .random_coord(&mut ctx.rng, false, limit_to_text_boundary);
+        let mut gen_alg = PrimsWeighted::new(ctx, None, limit_to_text_boundary).map_err(EngineError::Other)?;
+        let fill_start_coord = ctx.terminal.canvas.random_coord(&mut ctx.rng, false, limit_to_text_boundary);
         let fill_start_char = ctx.terminal.get_character_by_input_coord(fill_start_coord);
-        let fill_alg = BreadthFirst::new(ctx, fill_start_char, limit_to_text_boundary)
-            .map_err(EngineError::Other)?;
+        let fill_alg =
+            BreadthFirst::new(ctx, fill_start_char, limit_to_text_boundary).map_err(EngineError::Other)?;
 
         // SmokeIterator.build()
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -124,8 +106,8 @@ impl Effect for Smoke {
             .chain(self.config.final_gradient_stops.iter().rev())
             .cloned()
             .collect();
-        let smoke_gradient = Gradient::new(&smoke_gradient_colors, &[3, 4], false, false)
-            .map_err(EngineError::Other)?;
+        let smoke_gradient =
+            Gradient::new(&smoke_gradient_colors, &[3, 4], false, false).map_err(EngineError::Other)?;
 
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
@@ -135,8 +117,7 @@ impl Effect for Smoke {
                 outer_fill_chars: true,
                 added_chars: false,
             };
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             ctx.terminal.set_character_visibility(id, true);
@@ -151,19 +132,13 @@ impl Effect for Smoke {
                 )
             };
             let base_colors = if dynamic {
-                self.character_final_color_map
-                    .insert(id, ColorPair::new(input_fg, input_bg));
+                self.character_final_color_map.insert(id, ColorPair::new(input_fg, input_bg));
                 ColorPair::new(Some(blk.clone()), None)
             } else {
                 self.character_final_color_map.insert(
                     id,
                     ColorPair::new(
-                        Some(
-                            final_gradient_mapping
-                                .get(&input_coord)
-                                .cloned()
-                                .unwrap_or_else(|| blk.clone()),
-                        ),
+                        Some(final_gradient_mapping.get(&input_coord).cloned().unwrap_or_else(|| blk.clone())),
                         None,
                     ),
                 );
@@ -181,14 +156,7 @@ impl Effect for Smoke {
                     .scenes
                     .get_mut(&paint_scn)
                     .unwrap()
-                    .add_frame(
-                        &input_symbol,
-                        5,
-                        VisualParams {
-                            colors: Some(colors),
-                            ..Default::default()
-                        },
-                    )
+                    .add_frame(&input_symbol, 5, VisualParams { colors: Some(colors), ..Default::default() })
                     .map_err(EngineError::Other)?;
             } else {
                 let final_fg_color = self
@@ -206,8 +174,7 @@ impl Effect for Smoke {
                     .cloned()
                     .chain(std::iter::once(final_fg_color))
                     .collect();
-                let paint_gradient =
-                    Gradient::with_steps(&paint_stops, 5, false).map_err(EngineError::Other)?;
+                let paint_gradient = Gradient::with_steps(&paint_stops, 5, false).map_err(EngineError::Other)?;
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 ch.animation
                     .scenes
@@ -230,10 +197,7 @@ impl Effect for Smoke {
                         .add_frame(
                             smoke_symbol,
                             10,
-                            VisualParams {
-                                colors: Some(colors.clone()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(colors.clone()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
@@ -243,12 +207,7 @@ impl Effect for Smoke {
                     .scenes
                     .get_mut(&smoke_scn)
                     .unwrap()
-                    .apply_gradient_to_symbols(
-                        &self.config.smoke_symbols,
-                        3,
-                        Some(&smoke_gradient),
-                        None,
-                    )
+                    .apply_gradient_to_symbols(&self.config.smoke_symbols, 3, Some(&smoke_gradient), None)
                     .map_err(EngineError::Other)?;
             }
             ctx.register_event(
@@ -260,12 +219,7 @@ impl Effect for Smoke {
             .map_err(EngineError::Other)?;
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.animation.set_appearance(
-                    &input_symbol,
-                    uses_pre,
-                    Some(&input_symbol),
-                    Some(base_colors),
-                );
+                ch.animation.set_appearance(&input_symbol, uses_pre, Some(&input_symbol), Some(base_colors));
             }
         }
 

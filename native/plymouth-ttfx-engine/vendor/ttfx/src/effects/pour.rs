@@ -6,8 +6,8 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_non_negative_int,
-    parse_positive_float_range, parse_positive_int,
+    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_non_negative_int, parse_positive_float_range,
+    parse_positive_int,
 };
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
@@ -35,11 +35,7 @@ fn parse_pour_direction(s: &str) -> Result<PourDirection, String> {
         "down" => PourDirection::Down,
         "left" => PourDirection::Left,
         "right" => PourDirection::Right,
-        _ => {
-            return Err(format!(
-                "invalid choice: '{s}' (choose from 'up', 'down', 'left', 'right')"
-            ))
-        }
+        _ => return Err(format!("invalid choice: '{s}' (choose from 'up', 'down', 'left', 'right')")),
     })
 }
 
@@ -109,50 +105,32 @@ impl Pour {
 }
 
 impl EffectHooks for Pour {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Pour {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
         let pour_direction = self.config.pour_direction;
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord) = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
-                (
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                    ch.input_coord,
-                )
+                (ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone(), ch.input_coord)
             };
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
             self.character_final_color_map.insert(id, final_colors);
         }
@@ -162,19 +140,13 @@ impl Effect for Pour {
             PourDirection::Left => CharacterGroup::ColumnLeftToRight,
             PourDirection::Right => CharacterGroup::ColumnRightToLeft,
         };
-        let groups = ctx
-            .terminal
-            .get_characters_grouped(CharacterFilter::default(), grouping);
+        let groups = ctx.terminal.get_characters_grouped(CharacterFilter::default(), grouping);
         for (i, group) in groups.iter().enumerate() {
             for &id in group {
                 ctx.terminal.set_character_visibility(id, false);
                 let (input_coord, input_symbol, uses_pre) = {
                     let ch = &ctx.terminal.arena[id.0 as usize];
-                    (
-                        ch.input_coord,
-                        ch.input_symbol.clone(),
-                        ch.uses_input_preexisting_colors,
-                    )
+                    (ch.input_coord, ch.input_symbol.clone(), ch.uses_input_preexisting_colors)
                 };
                 let start_coord = match pour_direction {
                     PourDirection::Down => Coord::new(input_coord.column, ctx.terminal.canvas.top),
@@ -182,13 +154,8 @@ impl Effect for Pour {
                     PourDirection::Left => Coord::new(ctx.terminal.canvas.right, input_coord.row),
                     PourDirection::Right => Coord::new(ctx.terminal.canvas.left, input_coord.row),
                 };
-                ctx.terminal.arena[id.0 as usize]
-                    .motion
-                    .set_coordinate(start_coord);
-                let speed = ctx.rng.uniform(
-                    self.config.movement_speed_range.0,
-                    self.config.movement_speed_range.1,
-                );
+                ctx.terminal.arena[id.0 as usize].motion.set_coordinate(start_coord);
+                let speed = ctx.rng.uniform(self.config.movement_speed_range.0, self.config.movement_speed_range.1);
                 let input_coord_path = ctx.terminal.arena[id.0 as usize]
                     .motion
                     .new_path(speed, Some(self.config.movement_easing), None, 0, false, "")
@@ -215,23 +182,15 @@ impl Effect for Pour {
                         let final_bg_color = final_colors.bg_color.clone();
                         let fg_gradient = match &final_fg_color {
                             Some(c) => Some(
-                                Gradient::with_steps(
-                                    &[self.config.starting_color.clone(), c.clone()],
-                                    10,
-                                    false,
-                                )
-                                .map_err(EngineError::Other)?,
+                                Gradient::with_steps(&[self.config.starting_color.clone(), c.clone()], 10, false)
+                                    .map_err(EngineError::Other)?,
                             ),
                             None => None,
                         };
                         let bg_gradient = match &final_bg_color {
                             Some(c) => Some(
-                                Gradient::with_steps(
-                                    &[self.config.starting_color.clone(), c.clone()],
-                                    10,
-                                    false,
-                                )
-                                .map_err(EngineError::Other)?,
+                                Gradient::with_steps(&[self.config.starting_color.clone(), c.clone()], 10, false)
+                                    .map_err(EngineError::Other)?,
                             ),
                             None => None,
                         };
@@ -249,16 +208,12 @@ impl Effect for Pour {
                                 .add_frame(
                                     &input_symbol,
                                     self.config.final_gradient_frames,
-                                    VisualParams {
-                                        colors: Some(ColorPair::default()),
-                                        ..Default::default()
-                                    },
+                                    VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                                 )
                                 .map_err(EngineError::Other)?;
                         }
                     } else {
-                        let final_fg_color =
-                            final_colors.fg_color.clone().expect("gradient mapping fg");
+                        let final_fg_color = final_colors.fg_color.clone().expect("gradient mapping fg");
                         let pour_gradient = Gradient::new(
                             &[self.config.starting_color.clone(), final_fg_color],
                             &self.config.final_gradient_steps,
@@ -292,10 +247,7 @@ impl Effect for Pour {
     }
 
     fn next_frame(&mut self, ctx: &mut EngineCtx) -> Option<String> {
-        if !self.pending_groups.is_empty()
-            || !ctx.active_characters.is_empty()
-            || !self.current_group.is_empty()
-        {
+        if !self.pending_groups.is_empty() || !ctx.active_characters.is_empty() || !self.current_group.is_empty() {
             if self.current_group.is_empty() && !self.pending_groups.is_empty() {
                 self.current_group = self.pending_groups.remove(0);
             }

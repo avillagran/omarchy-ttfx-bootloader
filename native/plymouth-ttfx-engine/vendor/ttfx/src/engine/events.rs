@@ -165,12 +165,7 @@ impl EventHandler {
     /// register_event with the duplicate check (upstream raises
     /// DuplicateEventRegistrationError). Caller/target id resolution and type
     /// validation happen in EngineCtx::register_event, which has arena access.
-    pub fn push(
-        &mut self,
-        event: Event,
-        caller: CallerKey,
-        action: EventAction,
-    ) -> Result<(), String> {
+    pub fn push(&mut self, event: Event, caller: CallerKey, action: EventAction) -> Result<(), String> {
         let fingerprint = caller.as_ref().fingerprint();
         let existing = self.registered_events.iter_mut().find(|entry| {
             entry.event == event && entry.fingerprint == fingerprint && entry.caller == caller
@@ -185,12 +180,7 @@ impl EventHandler {
             }
             entry.actions.push(action);
         } else {
-            self.registered_events.push(RegisteredEvent {
-                event,
-                fingerprint,
-                caller,
-                actions: vec![action],
-            });
+            self.registered_events.push(RegisteredEvent { event, fingerprint, caller, actions: vec![action] });
         }
         self.subscribed |= event.bit();
         Ok(())

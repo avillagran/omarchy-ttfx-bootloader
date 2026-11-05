@@ -79,22 +79,13 @@ pub struct ColorShift {
 
 impl ColorShift {
     pub fn new(config: ColorShiftConfig) -> Self {
-        ColorShift {
-            config,
-            character_final_color_map: HashMap::new(),
-            loop_tracker_map: HashMap::new(),
-        }
+        ColorShift { config, character_final_color_map: HashMap::new(), loop_tracker_map: HashMap::new() }
     }
 }
 
 impl EffectHooks for ColorShift {
     /// ColorShiftIterator.loop_tracker.
-    fn dispatch_callback(
-        &mut self,
-        ctx: &mut EngineCtx,
-        character: CharId,
-        _callback: &EffectCallback,
-    ) {
+    fn dispatch_callback(&mut self, ctx: &mut EngineCtx, character: CharId, _callback: &EffectCallback) {
         let count = {
             let entry = self.loop_tracker_map.entry(character).or_insert(0);
             *entry += 1;
@@ -110,40 +101,28 @@ impl EffectHooks for ColorShift {
 
 impl Effect for ColorShift {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let input_coord = ctx.terminal.arena[id.0 as usize].input_coord;
-            self.character_final_color_map.insert(
-                id,
-                final_gradient_mapping.get(&input_coord).unwrap().clone(),
-            );
+            self.character_final_color_map
+                .insert(id, final_gradient_mapping.get(&input_coord).unwrap().clone());
         }
-        let gradient = Gradient::new(
-            &self.config.gradient_stops,
-            &self.config.gradient_steps,
-            false,
-            !self.config.no_loop,
-        )
-        .map_err(EngineError::Other)?;
+        let gradient =
+            Gradient::new(&self.config.gradient_stops, &self.config.gradient_steps, false, !self.config.no_loop)
+                .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             ctx.terminal.set_character_visibility(id, true);
@@ -164,9 +143,7 @@ impl Effect for ColorShift {
                     GradientDirection::Horizontal => {
                         input_coord.column as f64 / ctx.terminal.canvas.right as f64
                     }
-                    GradientDirection::Vertical => {
-                        input_coord.row as f64 / ctx.terminal.canvas.top as f64
-                    }
+                    GradientDirection::Vertical => input_coord.row as f64 / ctx.terminal.canvas.top as f64,
                     GradientDirection::Diagonal => {
                         (input_coord.row + input_coord.column) as f64
                             / (ctx.terminal.canvas.right + ctx.terminal.canvas.top) as f64
@@ -198,8 +175,7 @@ impl Effect for ColorShift {
             };
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.animation
-                    .new_scene(false, None, None, "gradient", uses_pre);
+                ch.animation.new_scene(false, None, None, "gradient", uses_pre);
                 let scene = ch.animation.scenes.get_mut("gradient").unwrap();
                 for color in &colors {
                     scene
@@ -213,8 +189,7 @@ impl Effect for ColorShift {
                         )
                         .map_err(EngineError::Other)?;
                 }
-                ch.animation
-                    .new_scene(false, None, None, "final_gradient", uses_pre);
+                ch.animation.new_scene(false, None, None, "final_gradient", uses_pre);
             }
             let last_color = colors.last().unwrap().clone();
             if dynamic {
@@ -248,18 +223,14 @@ impl Effect for ColorShift {
                         .add_frame(
                             &input_symbol,
                             self.config.gradient_frames,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
             } else {
                 let final_color = self.character_final_color_map.get(&id).unwrap().clone();
                 let final_scene_gradient =
-                    Gradient::with_steps(&[last_color, final_color], 8, false)
-                        .map_err(EngineError::Other)?;
+                    Gradient::with_steps(&[last_color, final_color], 8, false).map_err(EngineError::Other)?;
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 let scene = ch.animation.scenes.get_mut("final_gradient").unwrap();
                 for color in &final_scene_gradient.spectrum {
@@ -281,10 +252,7 @@ impl Effect for ColorShift {
                 id,
                 Event::SceneComplete,
                 CallerKey::Scene("gradient".to_string()),
-                EventAction::Callback(EffectCallback {
-                    id: 0,
-                    args: Vec::new(),
-                }),
+                EventAction::Callback(EffectCallback { id: 0, args: Vec::new() }),
             )
             .map_err(EngineError::Other)?;
         }

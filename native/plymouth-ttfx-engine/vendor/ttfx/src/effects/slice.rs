@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use clap::Args;
 
 use crate::cli::parse_color;
-use crate::effects::common::{
-    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float,
-};
+use crate::effects::common::{parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float};
 use crate::engine::animation::ExistingColorHandling;
 use crate::engine::character::CharId;
 use crate::engine::ctx::{EffectHooks, EngineCtx};
@@ -56,32 +54,19 @@ pub struct Slice {
 
 impl Slice {
     pub fn new(config: SliceConfig) -> Self {
-        Slice {
-            config,
-            character_final_color_map: HashMap::new(),
-        }
+        Slice { config, character_final_color_map: HashMap::new() }
     }
 }
 
 impl EffectHooks for Slice {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Slice {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -89,8 +74,7 @@ impl Effect for Slice {
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord, input_symbol, uses_pre) = {
@@ -106,20 +90,11 @@ impl Effect for Slice {
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
-            self.character_final_color_map
-                .insert(id, final_colors.clone());
+            self.character_final_color_map.insert(id, final_colors.clone());
             let ch = &mut ctx.terminal.arena[id.0 as usize];
-            ch.animation.set_appearance(
-                &input_symbol,
-                uses_pre,
-                Some(&input_symbol),
-                Some(final_colors),
-            );
+            ch.animation.set_appearance(&input_symbol, uses_pre, Some(&input_symbol), Some(final_colors));
         }
 
         // Per-character path setup shared by every branch: set the origin
@@ -134,14 +109,7 @@ impl Effect for Slice {
                     ch.motion.set_coordinate(origin);
                     let path_id = ch
                         .motion
-                        .new_path(
-                            self.config.movement_speed,
-                            Some(self.config.movement_easing),
-                            None,
-                            0,
-                            false,
-                            "",
-                        )
+                        .new_path(self.config.movement_speed, Some(self.config.movement_easing), None, 0, false, "")
                         .map_err(EngineError::Other)?;
                     ch.motion
                         .paths
@@ -167,17 +135,14 @@ impl Effect for Slice {
         let text_bottom = ctx.terminal.canvas.text_bottom;
 
         if self.config.slice_direction == "vertical" {
-            let rows = ctx
-                .terminal
-                .get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowBottomToTop);
+            let rows =
+                ctx.terminal.get_characters_grouped(CharacterFilter::default(), CharacterGroup::RowBottomToTop);
             for row_index in 0..rows.len() {
                 let row = &rows[row_index];
                 let left_half: Vec<CharId> = row
                     .iter()
                     .copied()
-                    .filter(|&id| {
-                        ctx.terminal.arena[id.0 as usize].input_coord.column <= text_center_column
-                    })
+                    .filter(|&id| ctx.terminal.arena[id.0 as usize].input_coord.column <= text_center_column)
                     .collect();
                 for id in &left_half {
                     let column = ctx.terminal.arena[id.0 as usize].input_coord.column;
@@ -187,9 +152,7 @@ impl Effect for Slice {
                 let right_half: Vec<CharId> = opposite_row
                     .iter()
                     .copied()
-                    .filter(|&id| {
-                        ctx.terminal.arena[id.0 as usize].input_coord.column > text_center_column
-                    })
+                    .filter(|&id| ctx.terminal.arena[id.0 as usize].input_coord.column > text_center_column)
                     .collect();
                 for id in &right_half {
                     let column = ctx.terminal.arena[id.0 as usize].input_coord.column;
@@ -251,19 +214,16 @@ impl Effect for Slice {
                 ctx.active_characters.extend(top_half);
             }
         } else if self.config.slice_direction == "diagonal" {
-            let diagonals = ctx.terminal.get_characters_grouped(
-                CharacterFilter::default(),
-                CharacterGroup::DiagonalBottomLeftToTopRight,
-            );
+            let diagonals = ctx
+                .terminal
+                .get_characters_grouped(CharacterFilter::default(), CharacterGroup::DiagonalBottomLeftToTopRight);
             let mut left: Vec<Vec<CharId>> = diagonals[..diagonals.len() / 2].to_vec();
             let mut right: Vec<Vec<CharId>> = diagonals[diagonals.len() / 2..].to_vec();
             while !left.is_empty() || !right.is_empty() {
                 if !left.is_empty() {
                     let left_group = left.remove(0);
                     let origin_coord = Coord::new(
-                        ctx.terminal.arena[left_group[0].0 as usize]
-                            .input_coord
-                            .column,
+                        ctx.terminal.arena[left_group[0].0 as usize].input_coord.column,
                         canvas_bottom - 1,
                     );
                     for id in &left_group {
@@ -274,9 +234,7 @@ impl Effect for Slice {
                 if !right.is_empty() {
                     let right_group = right.remove(0);
                     let origin_coord = Coord::new(
-                        ctx.terminal.arena[right_group[right_group.len() - 1].0 as usize]
-                            .input_coord
-                            .column,
+                        ctx.terminal.arena[right_group[right_group.len() - 1].0 as usize].input_coord.column,
                         canvas_top + 1,
                     );
                     for id in &right_group {

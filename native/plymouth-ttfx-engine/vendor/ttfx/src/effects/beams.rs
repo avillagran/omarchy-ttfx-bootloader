@@ -6,8 +6,7 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_gradient_direction, parse_gradient_steps, parse_positive_int, parse_positive_int_range,
-    parse_symbol,
+    parse_gradient_direction, parse_gradient_steps, parse_positive_int, parse_positive_int_range, parse_symbol,
 };
 use crate::engine::animation::{Animation, ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
@@ -124,12 +123,7 @@ impl Beams {
     }
 
     /// Group.__init__.
-    fn make_group(
-        &self,
-        ctx: &mut EngineCtx,
-        mut characters: Vec<CharId>,
-        direction: Direction,
-    ) -> Group {
+    fn make_group(&self, ctx: &mut EngineCtx, mut characters: Vec<CharId>, direction: Direction) -> Group {
         let speed_range = match direction {
             Direction::Row => self.config.beam_row_speed_range,
             Direction::Column => self.config.beam_column_speed_range,
@@ -146,22 +140,14 @@ impl Beams {
         if *ctx.rng.choice(&[true, false]) {
             characters.reverse();
         }
-        Group {
-            characters,
-            direction,
-            speed,
-            next_character_counter: 0.0,
-        }
+        Group { characters, direction, speed, next_character_counter: 0.0 }
     }
 
     /// Group.get_next_character.
     fn get_next_character(&mut self, ctx: &mut EngineCtx, group: &mut Group) -> Option<CharId> {
         group.next_character_counter -= 1.0;
         let next_character = group.characters.remove(0);
-        let active_scene = ctx.terminal.arena[next_character.0 as usize]
-            .animation
-            .active_scene
-            .clone();
+        let active_scene = ctx.terminal.arena[next_character.0 as usize].animation.active_scene.clone();
         let return_value = if let Some(scene_id) = active_scene {
             ctx.terminal.arena[next_character.0 as usize]
                 .animation
@@ -184,22 +170,15 @@ impl Beams {
 }
 
 impl EffectHooks for Beams {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Beams {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
         // __init__ precomputation (no RNG)
-        self.final_wipe_groups = ctx.terminal.get_characters_grouped(
-            CharacterFilter::default(),
-            CharacterGroup::DiagonalTopLeftToBottomRight,
-        );
+        self.final_wipe_groups = ctx
+            .terminal
+            .get_characters_grouped(CharacterFilter::default(), CharacterGroup::DiagonalTopLeftToBottomRight);
 
         let all_chars_filter = CharacterFilter {
             input_chars: true,
@@ -207,70 +186,42 @@ impl Effect for Beams {
             outer_fill_chars: true,
             added_chars: false,
         };
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
-        let characters = ctx.terminal.get_characters(
-            &mut ctx.rng,
-            all_chars_filter,
-            CharacterSort::TopToBottomLeftToRight,
-        );
+        let characters =
+            ctx.terminal.get_characters(&mut ctx.rng, all_chars_filter, CharacterSort::TopToBottomLeftToRight);
         for id in characters {
             let ch = &ctx.terminal.arena[id.0 as usize];
             if ch.is_fill_character {
-                self.character_final_color_map.insert(
-                    id,
-                    ColorPair::new(Some(Color::from_hex("#000000").unwrap()), None),
-                );
+                self.character_final_color_map
+                    .insert(id, ColorPair::new(Some(Color::from_hex("#000000").unwrap()), None));
                 continue;
             }
             let final_colors = if dynamic {
-                ColorPair::new(
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                )
+                ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()), None)
             };
             self.character_final_color_map.insert(id, final_colors);
         }
 
-        let beam_gradient = Gradient::new(
-            &self.config.beam_gradient_stops,
-            &self.config.beam_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let beam_gradient =
+            Gradient::new(&self.config.beam_gradient_stops, &self.config.beam_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let mut groups: Vec<Group> = Vec::new();
-        for row in ctx
-            .terminal
-            .get_characters_grouped(all_chars_filter, CharacterGroup::RowTopToBottom)
-        {
+        for row in ctx.terminal.get_characters_grouped(all_chars_filter, CharacterGroup::RowTopToBottom) {
             groups.push(self.make_group(ctx, row, Direction::Row));
         }
-        for column in ctx
-            .terminal
-            .get_characters_grouped(all_chars_filter, CharacterGroup::ColumnLeftToRight)
-        {
+        for column in ctx.terminal.get_characters_grouped(all_chars_filter, CharacterGroup::ColumnLeftToRight) {
             groups.push(self.make_group(ctx, column, Direction::Column));
         }
         // Rows and columns contain the same characters; initialize each character's scenes only once.
-        for group in groups
-            .iter()
-            .filter(|group| group.direction == Direction::Row)
-        {
+        for group in groups.iter().filter(|group| group.direction == Direction::Row) {
             for &id in &group.characters {
                 let (input_symbol, uses_pre) = {
                     let ch = &ctx.terminal.arena[id.0 as usize];
@@ -278,12 +229,9 @@ impl Effect for Beams {
                 };
                 {
                     let ch = &mut ctx.terminal.arena[id.0 as usize];
-                    ch.animation
-                        .new_scene(false, None, None, "beam_row", uses_pre);
-                    ch.animation
-                        .new_scene(false, None, None, "beam_column", uses_pre);
-                    ch.animation
-                        .new_scene(false, None, None, "brighten", uses_pre);
+                    ch.animation.new_scene(false, None, None, "beam_row", uses_pre);
+                    ch.animation.new_scene(false, None, None, "beam_column", uses_pre);
+                    ch.animation.new_scene(false, None, None, "brighten", uses_pre);
                     ch.animation
                         .scenes
                         .get_mut("beam_row")
@@ -367,10 +315,7 @@ impl Effect for Beams {
                         .add_frame(
                             &input_symbol,
                             2,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                     ch.animation
@@ -380,10 +325,7 @@ impl Effect for Beams {
                         .add_frame(
                             &input_symbol,
                             2,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
@@ -408,10 +350,7 @@ impl Effect for Beams {
                         .add_frame(
                             &input_symbol,
                             self.config.final_gradient_frames,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }

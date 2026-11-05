@@ -5,8 +5,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/base-test.sh"
 set -euo pipefail
 
 command_under_test="$ROOT/bin/omarchy-plymouth-ttfx-build"
-tmp=$(mktemp -d)
-trap 'rm -rf -- "$tmp"' EXIT
+tmp=$(mktemp -d "${TMPDIR:-/var/tmp}/ttfx-test.XXXXXXXX")
+printf 'Test fixtures: %s\n' "$tmp"
 
 mkdir -p "$tmp/bin" "$tmp/pkg"
 cat >"$tmp/module.c" <<'C'
@@ -40,7 +40,7 @@ fi
 grep -F 'unsupported Plymouth ABI' "$tmp/err" >/dev/null || fail "ABI refusal explains the supported ABI"
 pass "native package rejects a different Plymouth ABI"
 
-rm -rf -- "$tmp/pkg"
+mv -- "$tmp/pkg" "$tmp/pkg-retired"
 run_stage 26.134.222-2 26.134.222 >"$tmp/out" 2>"$tmp/err" || fail "native package accepts an ABI-matched package release" "$(cat "$tmp/err")"
 module="$tmp/pkg/usr/lib/plymouth/ttfx-plymouth.so"
 descriptor="$tmp/pkg/usr/share/plymouth/themes/omarchy/omarchy.plymouth"
@@ -87,6 +87,7 @@ SH
 chmod +x "$tmp/bin/cargo" "$tmp/bin/gcc"
 output="$tmp/built/ttfx-plymouth.so"
 sentinel="$ROOT/native/plymouth-ttfx-engine/target/plymouth/.package-test-sentinel"
+mkdir -p -- "${sentinel%/*}"
 printf 'untouched\n' >"$sentinel"
 env PATH="$tmp/bin:/usr/bin:/bin" \
   TEST_PLYMOUTH_VERSION=26.134.222-9 TEST_PKGCONFIG_VERSION=26.134.222 \

@@ -12,9 +12,7 @@
 use clap::Args;
 
 use crate::cli::parse_color;
-use crate::effects::common::{
-    parse_gradient_direction, parse_gradient_steps, parse_positive_int, parse_symbol,
-};
+use crate::effects::common::{parse_gradient_direction, parse_gradient_steps, parse_positive_int, parse_symbol};
 use crate::engine::animation::{Animation, ExistingColorHandling, Scene, VisualParams};
 use crate::engine::character::CharId;
 use crate::engine::ctx::{EffectHooks, EngineCtx, NoopHooks};
@@ -128,14 +126,8 @@ pub struct Thunderstorm {
 /// ThunderstormIterator._adjust_color_pair_brightness.
 fn adjust_color_pair_brightness(colors: &ColorPair, brightness: f64) -> ColorPair {
     ColorPair::new(
-        colors
-            .fg_color
-            .as_ref()
-            .map(|c| Animation::adjust_color_brightness(c, brightness)),
-        colors
-            .bg_color
-            .as_ref()
-            .map(|c| Animation::adjust_color_brightness(c, brightness)),
+        colors.fg_color.as_ref().map(|c| Animation::adjust_color_brightness(c, brightness)),
+        colors.bg_color.as_ref().map(|c| Animation::adjust_color_brightness(c, brightness)),
     )
 }
 
@@ -150,59 +142,48 @@ fn add_color_pair_gradient_frames(
     steps: i64,
     duration: i64,
 ) -> Result<(), String> {
-    let fg_steps: Vec<Option<Color>> =
-        if start_colors.fg_color.is_some() && end_colors.fg_color.is_some() {
-            Gradient::with_steps(
-                &[
-                    start_colors.fg_color.clone().unwrap(),
-                    end_colors.fg_color.clone().unwrap(),
-                ],
-                steps,
-                false,
-            )?
-            .spectrum
-            .into_iter()
-            .map(Some)
-            .collect()
+    let fg_steps: Vec<Option<Color>> = if start_colors.fg_color.is_some() && end_colors.fg_color.is_some() {
+        Gradient::with_steps(
+            &[start_colors.fg_color.clone().unwrap(), end_colors.fg_color.clone().unwrap()],
+            steps,
+            false,
+        )?
+        .spectrum
+        .into_iter()
+        .map(Some)
+        .collect()
+    } else {
+        let filler = if end_colors.fg_color.is_some() {
+            end_colors.fg_color.clone()
         } else {
-            let filler = if end_colors.fg_color.is_some() {
-                end_colors.fg_color.clone()
-            } else {
-                start_colors.fg_color.clone()
-            };
-            vec![filler; steps as usize]
+            start_colors.fg_color.clone()
         };
-    let bg_steps: Vec<Option<Color>> =
-        if start_colors.bg_color.is_some() && end_colors.bg_color.is_some() {
-            Gradient::with_steps(
-                &[
-                    start_colors.bg_color.clone().unwrap(),
-                    end_colors.bg_color.clone().unwrap(),
-                ],
-                steps,
-                false,
-            )?
-            .spectrum
-            .into_iter()
-            .map(Some)
-            .collect()
+        vec![filler; steps as usize]
+    };
+    let bg_steps: Vec<Option<Color>> = if start_colors.bg_color.is_some() && end_colors.bg_color.is_some() {
+        Gradient::with_steps(
+            &[start_colors.bg_color.clone().unwrap(), end_colors.bg_color.clone().unwrap()],
+            steps,
+            false,
+        )?
+        .spectrum
+        .into_iter()
+        .map(Some)
+        .collect()
+    } else {
+        let filler = if end_colors.bg_color.is_some() {
+            end_colors.bg_color.clone()
         } else {
-            let filler = if end_colors.bg_color.is_some() {
-                end_colors.bg_color.clone()
-            } else {
-                start_colors.bg_color.clone()
-            };
-            vec![filler; steps as usize]
+            start_colors.bg_color.clone()
         };
+        vec![filler; steps as usize]
+    };
     for index in 0..steps as usize {
         scene.add_frame(
             symbol,
             duration,
             VisualParams {
-                colors: Some(ColorPair::new(
-                    fg_steps[index].clone(),
-                    bg_steps[index].clone(),
-                )),
+                colors: Some(ColorPair::new(fg_steps[index].clone(), bg_steps[index].clone())),
                 ..Default::default()
             },
         )?;
@@ -220,37 +201,24 @@ fn initialize_raindrop(ctx: &mut EngineCtx, id: CharId) {
         &input_symbol,
         uses_pre,
         Some(&input_symbol),
-        Some(ColorPair::new(
-            Some(Color::from_hex("aaaaff").unwrap()),
-            None,
-        )),
+        Some(ColorPair::new(Some(Color::from_hex("aaaaff").unwrap()), None)),
     );
 }
 
 /// build_spark_pool's _build_spark_characters.
-fn initialize_spark(
-    ctx: &mut EngineCtx,
-    id: CharId,
-    spark_gradient: &Gradient,
-    spark_glow_time: i64,
-) {
+fn initialize_spark(ctx: &mut EngineCtx, id: CharId, spark_gradient: &Gradient, spark_glow_time: i64) {
     let ch = &mut ctx.terminal.arena[id.0 as usize];
     ch.layer = 2;
     let input_symbol = ch.input_symbol.clone();
     let uses_pre = ch.uses_input_preexisting_colors;
-    let spark_scn = ch
-        .animation
-        .new_scene(false, None, Some(Easing::InCirc), "glow", uses_pre);
+    let spark_scn = ch.animation.new_scene(false, None, Some(Easing::InCirc), "glow", uses_pre);
     let scene = ch.animation.scenes.get_mut(&spark_scn).unwrap();
     for color in &spark_gradient.spectrum {
         scene
             .add_frame(
                 &input_symbol,
                 spark_glow_time,
-                VisualParams {
-                    colors: Some(ColorPair::new(Some(color.clone()), None)),
-                    ..Default::default()
-                },
+                VisualParams { colors: Some(ColorPair::new(Some(color.clone()), None)), ..Default::default() },
             )
             .expect("spark glow frame failed");
     }
@@ -264,19 +232,12 @@ fn setup_raindrop(ctx: &mut EngineCtx, id: CharId) {
     let canvas_bottom = ctx.terminal.canvas.bottom;
     let fall_path = {
         let ch = &mut ctx.terminal.arena[id.0 as usize];
-        let path_id = ch
-            .motion
-            .new_path(speed, None, None, 0, false, "")
-            .expect("rain new_path failed");
+        let path_id = ch.motion.new_path(speed, None, None, 0, false, "").expect("rain new_path failed");
         ch.motion
             .paths
             .get_mut(&path_id)
             .unwrap()
-            .new_waypoint(
-                Coord::new(origin.column + canvas_top + 1, canvas_bottom - 1),
-                None,
-                "",
-            )
+            .new_waypoint(Coord::new(origin.column + canvas_top + 1, canvas_bottom - 1), None, "")
             .expect("rain new_waypoint failed");
         path_id
     };
@@ -285,10 +246,7 @@ fn setup_raindrop(ctx: &mut EngineCtx, id: CharId) {
         id,
         Event::PathComplete,
         CallerKey::Path(fall_path.clone()),
-        EventAction::Callback(EffectCallback {
-            id: CB_RECLAIM_RAIN,
-            args: Vec::new(),
-        }),
+        EventAction::Callback(EffectCallback { id: CB_RECLAIM_RAIN, args: Vec::new() }),
     )
     .expect("rain reclaim registration failed");
     // PATH_ACTIVATED has no registered handlers on the raindrop (events were
@@ -307,29 +265,21 @@ fn setup_sparks_for_impact(ctx: &mut EngineCtx, id: CharId) {
         .expect("spark new_path failed");
     let offset = ctx.rng.randint(4, 20) * *ctx.rng.choice(&[1i64, -1]);
     let spark_target = Coord::new(impact_coord.column + offset, ctx.terminal.canvas.bottom);
-    let bezier_column =
-        impact_coord.column - floor_div(impact_coord.column - spark_target.column, 2);
+    let bezier_column = impact_coord.column - floor_div(impact_coord.column - spark_target.column, 2);
     let bezier_row = ctx.rng.randint(1, ctx.terminal.canvas.top);
     ctx.terminal.arena[id.0 as usize]
         .motion
         .paths
         .get_mut(&spark_path)
         .unwrap()
-        .new_waypoint(
-            spark_target,
-            Some(vec![Coord::new(bezier_column, bezier_row)]),
-            "",
-        )
+        .new_waypoint(spark_target, Some(vec![Coord::new(bezier_column, bezier_row)]), "")
         .expect("spark new_waypoint failed");
     // spark_pool.reclaim_on_event(spark_char, "glow", event=SCENE_COMPLETE)
     ctx.register_event(
         id,
         Event::SceneComplete,
         CallerKey::Scene("glow".to_string()),
-        EventAction::Callback(EffectCallback {
-            id: CB_RECLAIM_SPARK,
-            args: Vec::new(),
-        }),
+        EventAction::Callback(EffectCallback { id: CB_RECLAIM_SPARK, args: Vec::new() }),
     )
     .expect("spark reclaim registration failed");
     // SCENE_ACTIVATED / PATH_ACTIVATED have no registered handlers here
@@ -342,8 +292,8 @@ impl Thunderstorm {
     pub fn new(config: ThunderstormConfig) -> Self {
         // build_rain_pool / build_spark_pool construction (preallocation runs
         // in build(), where ctx is available, in upstream __init__ order).
-        let rain_pool = ParticlePool::new(config.raindrop_symbols.clone(), None, None)
-            .expect("raindrop symbols validated by clap");
+        let rain_pool =
+            ParticlePool::new(config.raindrop_symbols.clone(), None, None).expect("raindrop symbols validated by clap");
         let spark_pool = ParticlePool::new(config.spark_symbols.clone(), Some(2000), None)
             .expect("spark symbols validated by clap");
         Thunderstorm {
@@ -355,9 +305,7 @@ impl Thunderstorm {
             available_strike_chars: Vec::new(),
             active_strike_chars: Vec::new(),
             spark_pool,
-            spark_gradient: Gradient {
-                spectrum: Vec::new(),
-            },
+            spark_gradient: Gradient { spectrum: Vec::new() },
             pending_glow_chars: Vec::new(),
             strike_in_progress: false,
             strike_branch_chance: 0.05,
@@ -434,10 +382,7 @@ impl Thunderstorm {
                     &input_symbol,
                     uses_pre,
                     Some(symbol),
-                    Some(ColorPair::new(
-                        Some(self.config.lightning_color.clone()),
-                        None,
-                    )),
+                    Some(ColorPair::new(Some(self.config.lightning_color.clone()), None)),
                 );
             }
             row -= 1;
@@ -463,14 +408,10 @@ impl Thunderstorm {
         self.setup_lightning_strike(ctx, None);
         let strike_base_color = self.config.lightning_color.clone();
         let strike_flash_color = Animation::adjust_color_brightness(&strike_base_color, 1.7);
-        let strike_gradient =
-            Gradient::with_steps(&[strike_base_color.clone(), strike_flash_color], 7, true)
-                .expect("strike gradient failed");
+        let strike_gradient = Gradient::with_steps(&[strike_base_color.clone(), strike_flash_color], 7, true)
+            .expect("strike gradient failed");
         let fade_gradient = Gradient::with_steps(
-            &[
-                strike_base_color,
-                ctx.terminal.config.terminal_background_color.clone(),
-            ],
+            &[strike_base_color, ctx.terminal.config.terminal_background_color.clone()],
             6,
             false,
         )
@@ -478,17 +419,12 @@ impl Thunderstorm {
         let layer = 1;
         let flash_ease = Easing::CubicBezier(0.0, 1.6, 1.0, ctx.rng.uniform(-0.6, 0.4));
         for &strike_char in &self.pending_strike_chars {
-            let symbol = ctx.terminal.arena[strike_char.0 as usize]
-                .animation
-                .current_character_visual
-                .symbol
-                .clone();
+            let symbol =
+                ctx.terminal.arena[strike_char.0 as usize].animation.current_character_visual.symbol.clone();
             {
                 let ch = &mut ctx.terminal.arena[strike_char.0 as usize];
                 let uses_pre = ch.uses_input_preexisting_colors;
-                let flash_scn =
-                    ch.animation
-                        .new_scene(false, None, Some(flash_ease), "flash", uses_pre);
+                let flash_scn = ch.animation.new_scene(false, None, Some(flash_ease), "flash", uses_pre);
                 let scene = ch.animation.scenes.get_mut(&flash_scn).unwrap();
                 for color in &strike_gradient.spectrum {
                     scene
@@ -529,38 +465,28 @@ impl Thunderstorm {
                 strike_char,
                 Event::SceneComplete,
                 CallerKey::Scene("fade".to_string()),
-                EventAction::Callback(EffectCallback {
-                    id: CB_HIDE_CHARACTER,
-                    args: Vec::new(),
-                }),
+                EventAction::Callback(EffectCallback { id: CB_HIDE_CHARACTER, args: Vec::new() }),
             )
             .expect("hide registration failed");
             ctx.register_event(
                 strike_char,
                 Event::SceneComplete,
                 CallerKey::Scene("fade".to_string()),
-                EventAction::Callback(EffectCallback {
-                    id: CB_MAKE_CHAR_GLOW,
-                    args: Vec::new(),
-                }),
+                EventAction::Callback(EffectCallback { id: CB_MAKE_CHAR_GLOW, args: Vec::new() }),
             )
             .expect("glow registration failed");
             ctx.register_event(
                 strike_char,
                 Event::SceneComplete,
                 CallerKey::Scene("fade".to_string()),
-                EventAction::Callback(EffectCallback {
-                    id: CB_RETURN_STRIKE_TO_POOL,
-                    args: Vec::new(),
-                }),
+                EventAction::Callback(EffectCallback { id: CB_RETURN_STRIKE_TO_POOL, args: Vec::new() }),
             )
             .expect("return registration failed");
         }
 
         let text_chars = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in text_chars {
             ctx.terminal.arena[id.0 as usize]
@@ -586,8 +512,7 @@ impl Thunderstorm {
                 }
                 let next_strike_char = self.pending_strike_chars.remove(0);
                 self.active_strike_chars.push(next_strike_char);
-                ctx.terminal
-                    .set_character_visibility(next_strike_char, true);
+                ctx.terminal.set_character_visibility(next_strike_char, true);
                 self.strike_progression_delay = 1;
 
                 // if the last strike_char was activated, activate the sparks
@@ -598,8 +523,7 @@ impl Thunderstorm {
                     let spark_glow_time = self.config.spark_glow_time;
                     let spark_count = ctx.rng.randint(12, 18);
                     for _ in 0..spark_count {
-                        let origin = ctx.terminal.arena
-                            [self.active_strike_chars.last().unwrap().0 as usize]
+                        let origin = ctx.terminal.arena[self.active_strike_chars.last().unwrap().0 as usize]
                             .motion
                             .current_coord;
                         let _ = self.spark_pool.emit(
@@ -607,13 +531,8 @@ impl Thunderstorm {
                             origin,
                             None,
                             true,
-                            ParticleReset {
-                                clear_events: true,
-                                ..Default::default()
-                            },
-                            |ctx, particle| {
-                                initialize_spark(ctx, particle, &spark_gradient, spark_glow_time)
-                            },
+                            ParticleReset { clear_events: true, ..Default::default() },
+                            |ctx, particle| initialize_spark(ctx, particle, &spark_gradient, spark_glow_time),
                             setup_sparks_for_impact,
                         );
                     }
@@ -638,11 +557,7 @@ impl Thunderstorm {
 
                     let text_chars = {
                         let filter = CharacterFilter::default();
-                        ctx.terminal.get_characters(
-                            &mut ctx.rng,
-                            filter,
-                            CharacterSort::TopToBottomLeftToRight,
-                        )
+                        ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
                     };
                     for id in text_chars {
                         ctx.activate_scene(self, id, "flash");
@@ -661,19 +576,14 @@ impl Thunderstorm {
         }
         let count = ctx.rng.randint(1, 6);
         for _ in 0..count {
-            let spawn_column = ctx
-                .rng
-                .randint(1 - ctx.terminal.canvas.top, ctx.terminal.canvas.right);
+            let spawn_column = ctx.rng.randint(1 - ctx.terminal.canvas.top, ctx.terminal.canvas.right);
             let origin = Coord::new(spawn_column - 1, ctx.terminal.canvas.top + 1);
             let _ = self.rain_pool.emit(
                 ctx,
                 origin,
                 None,
                 true,
-                ParticleReset {
-                    clear_events: true,
-                    ..Default::default()
-                },
+                ParticleReset { clear_events: true, ..Default::default() },
                 initialize_raindrop,
                 setup_raindrop,
             );
@@ -685,8 +595,7 @@ impl Thunderstorm {
     fn pre_storm_text_fade(&mut self, ctx: &mut EngineCtx) {
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             ctx.activate_scene(self, id, "fade");
@@ -698,8 +607,7 @@ impl Thunderstorm {
     fn post_storm_text_fade_in(&mut self, ctx: &mut EngineCtx) {
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             ctx.activate_scene(self, id, "unfade");
@@ -709,12 +617,7 @@ impl Thunderstorm {
 }
 
 impl EffectHooks for Thunderstorm {
-    fn dispatch_callback(
-        &mut self,
-        ctx: &mut EngineCtx,
-        character: CharId,
-        callback: &EffectCallback,
-    ) {
+    fn dispatch_callback(&mut self, ctx: &mut EngineCtx, character: CharId, callback: &EffectCallback) {
         match callback.id {
             CB_FADE_COMPLETE => {
                 self.phase = Phase::Storm;
@@ -722,9 +625,7 @@ impl EffectHooks for Thunderstorm {
             }
             CB_HIDE_CHARACTER => ctx.terminal.set_character_visibility(character, false),
             CB_MAKE_CHAR_GLOW => {
-                let coord = ctx.terminal.arena[character.0 as usize]
-                    .motion
-                    .current_coord;
+                let coord = ctx.terminal.arena[character.0 as usize].motion.current_coord;
                 if let Some(input_char) = ctx.terminal.get_character_by_input_coord(coord) {
                     if ctx.terminal.arena[input_char.0 as usize].is_visible {
                         ctx.activate_scene(self, input_char, "glow");
@@ -745,14 +646,9 @@ impl Effect for Thunderstorm {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
         // __init__ preamble (effect_thunderstorm.py:188-204): pools are
         // preallocated before build() runs, and the storm clock is read once.
-        self.rain_pool
-            .preallocate(ctx, 50, initialize_raindrop)
-            .map_err(EngineError::Other)?;
+        self.rain_pool.preallocate(ctx, 50, initialize_raindrop).map_err(EngineError::Other)?;
         self.spark_gradient = Gradient::with_steps(
-            &[
-                self.config.spark_glow_color.clone(),
-                ctx.terminal.config.terminal_background_color.clone(),
-            ],
+            &[self.config.spark_glow_color.clone(), ctx.terminal.config.terminal_background_color.clone()],
             7,
             false,
         )
@@ -769,13 +665,9 @@ impl Effect for Thunderstorm {
         self.storm_start_time = ctx.clock.now_monotonic();
 
         // build() body
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -786,8 +678,7 @@ impl Effect for Thunderstorm {
         let dynamic_neutral_gray = Color::from_hex("808080").unwrap();
         let all_chars = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &all_chars {
             let (input_symbol, input_coord, uses_pre, input_fg, input_bg) = {
@@ -802,20 +693,14 @@ impl Effect for Thunderstorm {
             };
             let (visible_colors, restore_colors) = if dynamic {
                 let visible = ColorPair::new(
-                    Some(
-                        input_fg
-                            .clone()
-                            .unwrap_or_else(|| dynamic_neutral_gray.clone()),
-                    ),
+                    Some(input_fg.clone().unwrap_or_else(|| dynamic_neutral_gray.clone())),
                     input_bg.clone(),
                 );
                 let restore = ColorPair::new(input_fg.clone(), input_bg.clone());
                 (visible, restore)
             } else {
-                let visible = ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                );
+                let visible =
+                    ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None);
                 (visible.clone(), visible)
             };
             let storm_colors = adjust_color_pair_brightness(&visible_colors, 0.5);
@@ -824,10 +709,7 @@ impl Effect for Thunderstorm {
 
             // post-strike glow and cool scene
             let glow_fg_gradient = Gradient::with_steps(
-                &[
-                    self.config.glowing_text_color.clone(),
-                    storm_colors.fg_color.clone().expect("storm fg"),
-                ],
+                &[self.config.glowing_text_color.clone(), storm_colors.fg_color.clone().expect("storm fg")],
                 7,
                 false,
             )
@@ -842,10 +724,7 @@ impl Effect for Thunderstorm {
                             &input_symbol,
                             self.config.text_glow_time,
                             VisualParams {
-                                colors: Some(ColorPair::new(
-                                    Some(color.clone()),
-                                    storm_colors.bg_color.clone(),
-                                )),
+                                colors: Some(ColorPair::new(Some(color.clone()), storm_colors.bg_color.clone())),
                                 ..Default::default()
                             },
                         )
@@ -856,10 +735,7 @@ impl Effect for Thunderstorm {
                         .add_frame(
                             &input_symbol,
                             self.config.text_glow_time,
-                            VisualParams {
-                                colors: Some(storm_colors.clone()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(storm_colors.clone()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
@@ -871,23 +747,13 @@ impl Effect for Thunderstorm {
                 let fade_scn = ch.animation.new_scene(false, None, None, "fade", uses_pre);
                 if dynamic {
                     let scene = ch.animation.scenes.get_mut(&fade_scn).unwrap();
-                    add_color_pair_gradient_frames(
-                        scene,
-                        &input_symbol,
-                        &visible_colors,
-                        &storm_colors,
-                        7,
-                        12,
-                    )
-                    .map_err(EngineError::Other)?;
+                    add_color_pair_gradient_frames(scene, &input_symbol, &visible_colors, &storm_colors, 7, 12)
+                        .map_err(EngineError::Other)?;
                     scene
                         .add_frame(
                             &input_symbol,
                             12,
-                            VisualParams {
-                                colors: Some(storm_colors.clone()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(storm_colors.clone()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 } else {
@@ -919,28 +785,16 @@ impl Effect for Thunderstorm {
             // unfade scene
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                let unfade_scn = ch
-                    .animation
-                    .new_scene(false, None, None, "unfade", uses_pre);
+                let unfade_scn = ch.animation.new_scene(false, None, None, "unfade", uses_pre);
                 if dynamic {
                     let scene = ch.animation.scenes.get_mut(&unfade_scn).unwrap();
-                    add_color_pair_gradient_frames(
-                        scene,
-                        &input_symbol,
-                        &storm_colors,
-                        &visible_colors,
-                        7,
-                        12,
-                    )
-                    .map_err(EngineError::Other)?;
+                    add_color_pair_gradient_frames(scene, &input_symbol, &storm_colors, &visible_colors, 7, 12)
+                        .map_err(EngineError::Other)?;
                     scene
                         .add_frame(
                             &input_symbol,
                             12,
-                            VisualParams {
-                                colors: Some(visible_colors.clone()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(visible_colors.clone()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                     if restore_colors != visible_colors {
@@ -948,10 +802,7 @@ impl Effect for Thunderstorm {
                             .add_frame(
                                 &input_symbol,
                                 12,
-                                VisualParams {
-                                    colors: Some(restore_colors.clone()),
-                                    ..Default::default()
-                                },
+                                VisualParams { colors: Some(restore_colors.clone()), ..Default::default() },
                             )
                             .map_err(EngineError::Other)?;
                     }
@@ -986,15 +837,10 @@ impl Effect for Thunderstorm {
             }
 
             // lightning flash scene
-            let lightning_flash_color = Animation::adjust_color_brightness(
-                visible_colors.fg_color.as_ref().expect("visible fg"),
-                1.7,
-            );
+            let lightning_flash_color =
+                Animation::adjust_color_brightness(visible_colors.fg_color.as_ref().expect("visible fg"), 1.7);
             let flash_gradient = Gradient::with_steps(
-                &[
-                    storm_colors.fg_color.clone().expect("storm fg"),
-                    lightning_flash_color,
-                ],
+                &[storm_colors.fg_color.clone().expect("storm fg"), lightning_flash_color],
                 7,
                 true,
             )
@@ -1009,10 +855,7 @@ impl Effect for Thunderstorm {
                             &input_symbol,
                             6,
                             VisualParams {
-                                colors: Some(ColorPair::new(
-                                    Some(color.clone()),
-                                    storm_colors.bg_color.clone(),
-                                )),
+                                colors: Some(ColorPair::new(Some(color.clone()), storm_colors.bg_color.clone())),
                                 ..Default::default()
                             },
                         )
@@ -1029,10 +872,7 @@ impl Effect for Thunderstorm {
             reference_char,
             Event::SceneComplete,
             CallerKey::Scene("fade".to_string()),
-            EventAction::Callback(EffectCallback {
-                id: CB_FADE_COMPLETE,
-                args: Vec::new(),
-            }),
+            EventAction::Callback(EffectCallback { id: CB_FADE_COMPLETE, args: Vec::new() }),
         )
         .map_err(EngineError::Other)?;
         Ok(())
@@ -1061,8 +901,7 @@ impl Effect for Thunderstorm {
                     ctx.active_characters.insert(glow_char);
                 }
                 self.pending_glow_chars.clear();
-                if ctx.clock.now_monotonic() - self.storm_start_time
-                    >= self.config.storm_time as f64
+                if ctx.clock.now_monotonic() - self.storm_start_time >= self.config.storm_time as f64
                     && !self.strike_in_progress
                 {
                     self.post_storm_text_fade_in(ctx);

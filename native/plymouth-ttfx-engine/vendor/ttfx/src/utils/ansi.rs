@@ -96,9 +96,7 @@ pub fn parse_ansi_color_sequence(sequence: &str) -> Result<ColorCode, String> {
             let v: i64 = if field.is_empty() {
                 0
             } else {
-                field
-                    .parse()
-                    .map_err(|_| "Invalid ANSI color sequence".to_string())?
+                field.parse().map_err(|_| "Invalid ANSI color sequence".to_string())?
             };
             write!(hex, "{v:02X}").unwrap();
         }
@@ -106,9 +104,7 @@ pub fn parse_ansi_color_sequence(sequence: &str) -> Result<ColorCode, String> {
     }
     if let Some(rest) = s.strip_prefix("38;5").or_else(|| s.strip_prefix("48;5")) {
         let rest = rest.strip_prefix(';').unwrap_or(rest);
-        let v: i64 = rest
-            .parse()
-            .map_err(|_| "Invalid ANSI color sequence".to_string())?;
+        let v: i64 = rest.parse().map_err(|_| "Invalid ANSI color sequence".to_string())?;
         return Ok(ColorCode::Xterm(v as u8));
     }
     Err("Invalid ANSI color sequence".to_string())
@@ -135,10 +131,7 @@ mod tests {
 
     #[test]
     fn parse_8_bit() {
-        assert_eq!(
-            parse_ansi_color_sequence("\x1b[48;5;42m"),
-            Ok(ColorCode::Xterm(42))
-        );
+        assert_eq!(parse_ansi_color_sequence("\x1b[48;5;42m"), Ok(ColorCode::Xterm(42)));
     }
 
     #[test]

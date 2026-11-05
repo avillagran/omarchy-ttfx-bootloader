@@ -11,9 +11,7 @@ use std::collections::HashMap;
 use clap::Args;
 
 use crate::cli::parse_color;
-use crate::effects::common::{
-    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float,
-};
+use crate::effects::common::{parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float};
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
 use crate::engine::ctx::{EffectHooks, EngineCtx};
@@ -36,11 +34,7 @@ fn parse_expand_direction(s: &str) -> Result<ExpandDirection, String> {
     Ok(match s {
         "vertical" => ExpandDirection::Vertical,
         "horizontal" => ExpandDirection::Horizontal,
-        _ => {
-            return Err(format!(
-                "invalid choice: '{s}' (choose from 'vertical', 'horizontal')"
-            ))
-        }
+        _ => return Err(format!("invalid choice: '{s}' (choose from 'vertical', 'horizontal')")),
     })
 }
 
@@ -99,41 +93,26 @@ pub struct Middleout {
 
 impl Middleout {
     pub fn new(config: MiddleoutConfig) -> Self {
-        Middleout {
-            config,
-            character_final_color_map: HashMap::new(),
-            phase: Phase::Center,
-        }
+        Middleout { config, character_final_color_map: HashMap::new(), phase: Phase::Center }
     }
 }
 
 impl EffectHooks for Middleout {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Middleout {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord, input_symbol, uses_pre) = {
@@ -149,17 +128,11 @@ impl Effect for Middleout {
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
-            self.character_final_color_map
-                .insert(id, final_colors.clone());
+            self.character_final_color_map.insert(id, final_colors.clone());
             let center = ctx.terminal.canvas.center;
-            ctx.terminal.arena[id.0 as usize]
-                .motion
-                .set_coordinate(center);
+            ctx.terminal.arena[id.0 as usize].motion.set_coordinate(center);
             // setup waypoints
             let (column, row) = match self.config.expand_direction {
                 ExpandDirection::Vertical => (input_coord.column, ctx.terminal.canvas.center_row),
@@ -168,14 +141,7 @@ impl Effect for Middleout {
             let center_path = {
                 let motion = &mut ctx.terminal.arena[id.0 as usize].motion;
                 let path_id = motion
-                    .new_path(
-                        self.config.center_movement_speed,
-                        Some(self.config.center_easing),
-                        None,
-                        0,
-                        false,
-                        "",
-                    )
+                    .new_path(self.config.center_movement_speed, Some(self.config.center_easing), None, 0, false, "")
                     .map_err(EngineError::Other)?;
                 motion
                     .paths
@@ -188,14 +154,7 @@ impl Effect for Middleout {
             {
                 let motion = &mut ctx.terminal.arena[id.0 as usize].motion;
                 motion
-                    .new_path(
-                        self.config.full_movement_speed,
-                        Some(self.config.full_easing),
-                        None,
-                        0,
-                        false,
-                        "full",
-                    )
+                    .new_path(self.config.full_movement_speed, Some(self.config.full_easing), None, 0, false, "full")
                     .map_err(EngineError::Other)?;
                 motion
                     .paths
@@ -215,23 +174,15 @@ impl Effect for Middleout {
                 if dynamic {
                     let fg_gradient = match &final_fg_color {
                         Some(c) => Some(
-                            Gradient::with_steps(
-                                &[self.config.starting_color.clone(), c.clone()],
-                                10,
-                                false,
-                            )
-                            .map_err(EngineError::Other)?,
+                            Gradient::with_steps(&[self.config.starting_color.clone(), c.clone()], 10, false)
+                                .map_err(EngineError::Other)?,
                         ),
                         None => None,
                     };
                     let bg_gradient = match &final_bg_color {
                         Some(c) => Some(
-                            Gradient::with_steps(
-                                &[self.config.starting_color.clone(), c.clone()],
-                                10,
-                                false,
-                            )
-                            .map_err(EngineError::Other)?,
+                            Gradient::with_steps(&[self.config.starting_color.clone(), c.clone()], 10, false)
+                                .map_err(EngineError::Other)?,
                         ),
                         None => None,
                     };
@@ -249,28 +200,17 @@ impl Effect for Middleout {
                             .add_frame(
                                 &input_symbol,
                                 6,
-                                VisualParams {
-                                    colors: Some(ColorPair::default()),
-                                    ..Default::default()
-                                },
+                                VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                             )
                             .map_err(EngineError::Other)?;
                     }
                 } else {
                     let final_fg_color = final_fg_color.expect("gradient mapping fg");
-                    let full_gradient = Gradient::with_steps(
-                        &[self.config.starting_color.clone(), final_fg_color],
-                        10,
-                        false,
-                    )
-                    .map_err(EngineError::Other)?;
+                    let full_gradient =
+                        Gradient::with_steps(&[self.config.starting_color.clone(), final_fg_color], 10, false)
+                            .map_err(EngineError::Other)?;
                     scene
-                        .apply_gradient_to_symbols(
-                            &[input_symbol.clone()],
-                            6,
-                            Some(&full_gradient),
-                            None,
-                        )
+                        .apply_gradient_to_symbols(&[input_symbol.clone()], 6, Some(&full_gradient), None)
                         .map_err(EngineError::Other)?;
                 }
             }
@@ -285,10 +225,7 @@ impl Effect for Middleout {
                     &input_symbol,
                     uses_pre,
                     Some(&input_symbol.clone()),
-                    Some(ColorPair::new(
-                        Some(self.config.starting_color.clone()),
-                        None,
-                    )),
+                    Some(ColorPair::new(Some(self.config.starting_color.clone()), None)),
                 );
             }
             ctx.terminal.set_character_visibility(id, true);
@@ -302,11 +239,7 @@ impl Effect for Middleout {
             self.phase = Phase::Full;
             let characters = {
                 let filter = CharacterFilter::default();
-                ctx.terminal.get_characters(
-                    &mut ctx.rng,
-                    filter,
-                    CharacterSort::TopToBottomLeftToRight,
-                )
+                ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
             };
             ctx.active_characters = characters.into_iter().collect();
             // upstream iterates the set here; canonical ascending character_id

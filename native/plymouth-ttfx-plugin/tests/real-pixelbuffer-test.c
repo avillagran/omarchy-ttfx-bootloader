@@ -53,7 +53,7 @@ int main(void)
         assert(!ttfx_raw_publish(dir, pixels, 1280, 2161, stamp));
         assert(!ttfx_raw_publish(dir, pixels, 1280, 720, UINT64_MAX));
         assert(!ttfx_raw_publish(dir, pixels, 1280, 720, 0));
-        assert(symlinkat("/no-such-target", dir, TTFX_RAW_TEMP) == 0);
+        assert(symlinkat("missing-target", dir, TTFX_RAW_TEMP) == 0);
         assert(!ttfx_raw_publish(dir, pixels, 1280, 720, stamp));
         assert(unlinkat(dir, TTFX_RAW_TEMP, 0) == 0);
         assert(ttfx_raw_publish(dir, pixels, 1280, 720, stamp));

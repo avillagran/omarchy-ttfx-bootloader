@@ -4,61 +4,37 @@ set -euo pipefail
 [[ $EUID == 0 ]] || { echo "Run this script through sudo." >&2; exit 1; }
 export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/usr/sbin
 
-state_dir=/var/lib/omarchy-ttfx-bootloader
-helper=/usr/local/lib/omarchy-plymouth-ttfx-install
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# shellcheck source=scripts/common.sh
+source "$root/scripts/common.sh"
+
 [[ -f $state_dir/.installed ]] || { echo "No TTFX installer state found." >&2; exit 1; }
-arch=$(uname -m)
+if [[ ! -f $installed_hashes ]]; then
+  echo "This TTFX install comes from the 2026-09 installer, whose backups may predate package updates." >&2
+  echo "Run the current installer once, then uninstall." >&2
+  exit 1
+fi
+invoking_user=$(<"$state_dir/invoking-user")
 user_home=$(<"$state_dir/user-home")
 menu_extension="$user_home/.config/omarchy/extensions/omarchy-menu.jsonc"
-audio_plugin="$user_home/.config/omarchy/plugins/io.github.avillagran.omarchy-audio-background"
-bridge_target="$audio_plugin/bin/ttfx-bg-rs-$arch"
-runtime_commands=(
-  omarchy-plymouth-effect-list
-  omarchy-plymouth-effect-set
-  omarchy-plymouth-effect-switcher
-  omarchy-plymouth-playback-set
-)
-runtime_dirs=(/usr/share/omarchy/bin /usr/local/bin /usr/bin)
 
-restore_file() {
-  local path=$1 name=${1//\//_}
-  if [[ -f $state_dir/$name.absent ]]; then
-    rm -f -- "$path"
-  elif [[ -e $state_dir/$name || -L $state_dir/$name ]]; then
-    install -d -m 0755 "${path%/*}"
-    cp -a --remove-destination "$state_dir/$name" "$path"
-  else
-    echo "Missing uninstall backup for $path" >&2
-    exit 1
+# Give back only what is still exactly as the install left it. A file changed
+# since, for example by an omarchy-settings update, already is someone
+# else's and stays as it is.
+left=()
+while IFS= read -r path; do
+  if ours_now "$path"; then
+    restore_file "$path"
+  elif recorded_hash "$path" >/dev/null && [[ -e $path ]]; then
+    left+=("$path")
   fi
-}
-
-restore_file /usr/lib/plymouth/ttfx-plymouth.so
-restore_file /usr/share/plymouth/themes/omarchy/omarchy.plymouth
-restore_file /usr/share/omarchy/default/plymouth/omarchy.plymouth
-restore_file /usr/share/omarchy/default/plymouth/ttfx-effects.txt
-restore_file /etc/plymouth/plymouthd.conf
-restore_file /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf
-restore_file /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf
-restore_file "$helper"
-restore_file "$menu_extension"
-for directory in "${runtime_dirs[@]}"; do
-  for command in "${runtime_commands[@]}"; do
-    restore_file "$directory/$command"
-  done
-done
-if [[ -e $state_dir/${bridge_target//\//_} || -e $state_dir/${bridge_target//\//_}.absent ]]; then
-  restore_file "$bridge_target"
-fi
+done < <(managed_files)
 
 if [[ -f $state_dir/omarchy-static.absent ]]; then
   rm -rf -- /usr/share/plymouth/themes/omarchy-static
 elif [[ -d $state_dir/omarchy-static ]]; then
   rm -rf -- /usr/share/plymouth/themes/omarchy-static
   cp -a --no-dereference "$state_dir/omarchy-static" /usr/share/plymouth/themes/omarchy-static
-else
-  echo "Missing uninstall backup for omarchy-static theme" >&2
-  exit 1
 fi
 
 previous_theme=$(<"$state_dir/previous-theme")
@@ -71,10 +47,17 @@ if [[ $(plymouth-set-default-theme) != "$previous_theme" ]]; then
   fi
   plymouth-set-default-theme "$previous_theme"
 fi
-if [[ -x /usr/bin/limine-mkinitcpio ]]; then
-  /usr/bin/limine-mkinitcpio
-else
-  /usr/bin/mkinitcpio -P
+rmdir --ignore-fail-on-non-empty /etc/systemd/system/plymouth-quit.service.d 2>/dev/null || true
+systemctl daemon-reload
+rebuild_boot_images
+
+if [[ -n $invoking_user && -d $user_home ]]; then
+  runuser -u "$invoking_user" -- python3 "$root/scripts/menu-extension.py" remove "$menu_extension" ||
+    echo "The Bootloader entries stay in $menu_extension; remove them by hand." >&2
 fi
-rm -rf "$state_dir"
+
+rm -rf -- "$state_dir"
+for path in "${left[@]}"; do
+  printf 'Left as it is (changed since the install): %s\n' "$path"
+done
 echo "Uninstalled TTFX Plymouth. Reboot to test the restored boot theme."

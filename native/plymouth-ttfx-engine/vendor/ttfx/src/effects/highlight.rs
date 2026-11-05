@@ -6,8 +6,7 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_character_group, parse_gradient_direction, parse_gradient_steps, parse_positive_float,
-    parse_positive_int,
+    parse_character_group, parse_gradient_direction, parse_gradient_steps, parse_positive_float, parse_positive_int,
 };
 use crate::engine::animation::{Animation, ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
@@ -58,38 +57,23 @@ pub struct Highlight {
 
 impl Highlight {
     pub fn new(config: HighlightConfig) -> Self {
-        Highlight {
-            config,
-            character_final_color_map: HashMap::new(),
-            easer: None,
-        }
+        Highlight { config, character_final_color_map: HashMap::new(), easer: None }
     }
 }
 
 impl EffectHooks for Highlight {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Highlight {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let groups = ctx
-            .terminal
-            .get_characters_grouped(CharacterFilter::default(), self.config.highlight_direction);
+        let groups =
+            ctx.terminal.get_characters_grouped(CharacterFilter::default(), self.config.highlight_direction);
         self.easer = Some(SequenceEaser::new(groups, Easing::InOutCirc, 100));
 
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -97,8 +81,7 @@ impl Effect for Highlight {
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord, input_symbol, uses_pre) = {
@@ -114,13 +97,9 @@ impl Effect for Highlight {
             let (base_color, input_bg_color) = if dynamic {
                 (input_fg, input_bg)
             } else {
-                (
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                (Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
-            self.character_final_color_map
-                .insert(id, base_color.clone());
+            self.character_final_color_map.insert(id, base_color.clone());
             let base_colors = ColorPair::new(base_color.clone(), input_bg_color.clone());
             let highlight_gradient = match &base_color {
                 Some(base) => {
@@ -128,12 +107,7 @@ impl Effect for Highlight {
                         Animation::adjust_color_brightness(base, self.config.highlight_brightness);
                     Some(
                         Gradient::new(
-                            &[
-                                base.clone(),
-                                highlight_color.clone(),
-                                highlight_color,
-                                base.clone(),
-                            ],
+                            &[base.clone(), highlight_color.clone(), highlight_color, base.clone()],
                             &[3, self.config.highlight_width, 3],
                             false,
                             false,
@@ -145,14 +119,8 @@ impl Effect for Highlight {
             };
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.animation.set_appearance(
-                    &input_symbol,
-                    uses_pre,
-                    Some(&input_symbol),
-                    Some(base_colors.clone()),
-                );
-                ch.animation
-                    .new_scene(false, None, None, "highlight", uses_pre);
+                ch.animation.set_appearance(&input_symbol, uses_pre, Some(&input_symbol), Some(base_colors.clone()));
+                ch.animation.new_scene(false, None, None, "highlight", uses_pre);
                 let scene = ch.animation.scenes.get_mut("highlight").unwrap();
                 if let Some(gradient) = &highlight_gradient {
                     for color in &gradient.spectrum {
@@ -161,10 +129,7 @@ impl Effect for Highlight {
                                 &input_symbol,
                                 2,
                                 VisualParams {
-                                    colors: Some(ColorPair::new(
-                                        Some(color.clone()),
-                                        input_bg_color.clone(),
-                                    )),
+                                    colors: Some(ColorPair::new(Some(color.clone()), input_bg_color.clone())),
                                     ..Default::default()
                                 },
                             )
@@ -175,10 +140,7 @@ impl Effect for Highlight {
                         .add_frame(
                             &input_symbol,
                             2,
-                            VisualParams {
-                                colors: Some(base_colors.clone()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(base_colors.clone()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }

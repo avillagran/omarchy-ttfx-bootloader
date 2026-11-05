@@ -9,7 +9,9 @@ use std::collections::HashSet;
 use crate::utils::pycompat::round_half_even;
 
 /// 1-based canvas coordinate: column grows right, row grows UP (origin bottom-left).
+/// `repr(C)`: the fx motion batch loads a run of them as (column, row) pairs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[repr(C)]
 pub struct Coord {
     pub column: i64,
     pub row: i64,
@@ -52,12 +54,12 @@ pub fn find_coords_on_circle(
     if radius == 0 {
         return points;
     }
-    let mut seen: HashSet<Coord> = HashSet::new();
     let coords_limit = if coords_limit == 0 {
         round_half_even(2.0 * std::f64::consts::PI * radius as f64)
     } else {
         coords_limit
     };
+    let mut seen = (unique && coords_limit > 1).then(HashSet::new);
     let angle_step = 2.0 * std::f64::consts::PI / coords_limit as f64;
     for i in 0..coords_limit {
         let angle = angle_step * i as f64;
@@ -66,14 +68,9 @@ pub fn find_coords_on_circle(
         x += x_diff;
         let y = origin.row as f64 + radius as f64 * angle.sin();
         let point = Coord::new(round_half_even(x), round_half_even(y));
-        if unique {
-            if !seen.contains(&point) {
-                points.push(point);
-            }
-        } else {
+        if seen.as_mut().map_or(true, |seen| seen.insert(point)) {
             points.push(point);
         }
-        seen.insert(point);
     }
     points
 }
@@ -81,21 +78,45 @@ pub fn find_coords_on_circle(
 /// find_coords_in_circle: actually an ellipse (a = diameter, b = diameter/2);
 /// int() truncation on the y offset, faithfully.
 pub fn find_coords_in_circle(center: Coord, diameter: i64) -> Vec<Coord> {
-    let (h, k) = (center.column, center.row);
-    let mut coords: Vec<Coord> = Vec::new();
+    let mut coords = Vec::new();
     if diameter == 0 {
         return coords;
     }
+    let (h, k) = (center.column, center.row);
     let a_squared = (diameter as f64).powf(2.0);
     let b_squared = (diameter as f64 / 2.0).powf(2.0);
+    // Keep the eager nested loop: collecting the flattened iterator is slower
+    // for callers that need a vector, particularly for small circles.
     for x in (h - diameter)..=(h + diameter) {
-        let x_component = ((x - h) as f64).powf(2.0) / a_squared;
-        let max_y_offset = (b_squared * (1.0 - x_component)).powf(0.5) as i64;
-        for y in (k - max_y_offset)..=(k + max_y_offset) {
+        for y in circle_column_y_range(x, h, k, a_squared, b_squared) {
             coords.push(Coord::new(x, y));
         }
     }
     coords
+}
+
+#[inline]
+fn circle_column_y_range(
+    x: i64,
+    h: i64,
+    k: i64,
+    a_squared: f64,
+    b_squared: f64,
+) -> std::ops::RangeInclusive<i64> {
+    let x_component = ((x - h) as f64).powf(2.0) / a_squared;
+    let max_y_offset = (b_squared * (1.0 - x_component)).powf(0.5) as i64;
+    (k - max_y_offset)..=(k + max_y_offset)
+}
+
+/// Stream the same column-major ellipse for callers that only visit its cells.
+pub(crate) fn coords_in_circle(center: Coord, diameter: i64) -> impl Iterator<Item = Coord> {
+    let (h, k) = (center.column, center.row);
+    let columns = (diameter != 0).then(|| (h - diameter)..=(h + diameter));
+    let a_squared = (diameter as f64).powf(2.0);
+    let b_squared = (diameter as f64 / 2.0).powf(2.0);
+    columns.into_iter().flatten().flat_map(move |x| {
+        circle_column_y_range(x, h, k, a_squared, b_squared).map(move |y| Coord::new(x, y))
+    })
 }
 
 /// find_coords_in_rect: full (2d+1)^2 block, empty for distance 0.

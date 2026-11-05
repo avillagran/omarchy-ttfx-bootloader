@@ -6,8 +6,7 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_character_group, parse_easing, parse_gradient_direction, parse_gradient_steps,
-    parse_non_negative_int,
+    parse_character_group, parse_easing, parse_gradient_direction, parse_gradient_steps, parse_non_negative_int,
 };
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
@@ -63,39 +62,22 @@ pub struct Wipe {
 impl Wipe {
     pub fn new(config: WipeConfig) -> Self {
         let wipe_delay = config.wipe_delay;
-        Wipe {
-            config,
-            character_final_color_map: HashMap::new(),
-            easer: None,
-            wipe_delay,
-        }
+        Wipe { config, character_final_color_map: HashMap::new(), easer: None, wipe_delay }
     }
 }
 
 impl EffectHooks for Wipe {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Wipe {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let groups = ctx
-            .terminal
-            .get_characters_grouped(CharacterFilter::default(), self.config.wipe_direction);
+        let groups = ctx.terminal.get_characters_grouped(CharacterFilter::default(), self.config.wipe_direction);
         self.easer = Some(SequenceEaser::new(groups, self.config.wipe_ease, 100));
 
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -103,8 +85,7 @@ impl Effect for Wipe {
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord, input_symbol, uses_pre) = {
@@ -120,13 +101,9 @@ impl Effect for Wipe {
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
-            self.character_final_color_map
-                .insert(id, final_colors.clone());
+            self.character_final_color_map.insert(id, final_colors.clone());
 
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
@@ -139,10 +116,7 @@ impl Effect for Wipe {
                             .add_frame(
                                 &input_symbol,
                                 self.config.final_gradient_frames,
-                                VisualParams {
-                                    colors: Some(final_colors.clone()),
-                                    ..Default::default()
-                                },
+                                VisualParams { colors: Some(final_colors.clone()), ..Default::default() },
                             )
                             .map_err(EngineError::Other)?;
                     }

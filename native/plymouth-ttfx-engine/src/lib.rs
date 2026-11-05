@@ -474,8 +474,9 @@ pub unsafe extern "C" fn ttfx_engine_create_with_background(
     })
 }
 
-/// Advance one live frame. `*out_looped` is 1 when this is the first frame of
-/// a deterministically reconstructed loop.
+/// Advance one live frame. The legacy `out_looped` output is 1 on completion.
+/// The terminal snapshot is retained; subsequent steps return 1 unchanged until
+/// an explicit [`ttfx_engine_reset`].
 ///
 /// # Safety
 ///

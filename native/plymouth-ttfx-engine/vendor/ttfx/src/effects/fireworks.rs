@@ -6,8 +6,7 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_gradient_direction, parse_gradient_steps, parse_non_negative_int,
-    parse_non_negative_ratio, parse_symbol,
+    parse_gradient_direction, parse_gradient_steps, parse_non_negative_int, parse_non_negative_ratio, parse_symbol,
 };
 use crate::engine::animation::{ExistingColorHandling, SyncMetric, VisualParams};
 use crate::engine::character::CharId;
@@ -89,8 +88,7 @@ impl Fireworks {
         let mut firework_shell: Vec<CharId> = Vec::new();
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         let canvas_bottom = ctx.terminal.canvas.bottom;
         let canvas_top = ctx.terminal.canvas.top;
@@ -111,14 +109,12 @@ impl Fireworks {
                 };
                 let origin_y = ctx.rng.randrange(min_row, canvas_top + 1);
                 origin_coord = Coord::new(origin_x, origin_y);
-                explode_waypoint_coords =
-                    geometry::find_coords_in_circle(origin_coord, self.explode_distance);
+                explode_waypoint_coords = geometry::find_coords_in_circle(origin_coord, self.explode_distance);
             }
             let input_coord = ctx.terminal.arena[id.0 as usize].input_coord;
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.motion
-                    .set_coordinate(Coord::new(origin_x, canvas_bottom));
+                ch.motion.set_coordinate(Coord::new(origin_x, canvas_bottom));
                 let apex_path = ch
                     .motion
                     .new_path(0.35, Some(Easing::OutExpo), Some(2), 0, false, "apex_pth")
@@ -154,10 +150,8 @@ impl Fireworks {
                 explode_wpt_coord,
                 floor_div(self.explode_distance, 2) as f64,
             );
-            let bloom_wpt_coord = Coord::new(
-                bloom_control_point.column,
-                std::cmp::max(1, bloom_control_point.row - 7),
-            );
+            let bloom_wpt_coord =
+                Coord::new(bloom_control_point.column, std::cmp::max(1, bloom_control_point.row - 7));
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 ch.motion
@@ -171,14 +165,7 @@ impl Fireworks {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 let input_path = ch
                     .motion
-                    .new_path(
-                        0.6,
-                        Some(Easing::InOutQuart),
-                        Some(2),
-                        0,
-                        false,
-                        "input_pth",
-                    )
+                    .new_path(0.6, Some(Easing::InOutQuart), Some(2), 0, false, "input_pth")
                     .map_err(EngineError::Other)?;
                 let input_control_point = Coord::new(bloom_wpt_coord.column, 1);
                 ch.motion
@@ -222,35 +209,24 @@ impl Fireworks {
 
     /// FireworksIterator.prepare_scenes.
     fn prepare_scenes(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let final_colors = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
                 if dynamic {
-                    ColorPair::new(
-                        ch.animation.input_fg_color.clone(),
-                        ch.animation.input_bg_color.clone(),
-                    )
+                    ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
                 } else {
-                    ColorPair::new(
-                        Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()),
-                        None,
-                    )
+                    ColorPair::new(Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()), None)
                 }
             };
             self.character_final_color_map.insert(id, final_colors);
@@ -259,12 +235,9 @@ impl Fireworks {
         let shells = self.shells.clone();
         for firework_shell in shells {
             let shell_color = ctx.rng.choice(&self.config.firework_colors).clone();
-            let shell_gradient = Gradient::with_steps(
-                &[shell_color.clone(), white.clone(), shell_color.clone()],
-                5,
-                false,
-            )
-            .map_err(EngineError::Other)?;
+            let shell_gradient =
+                Gradient::with_steps(&[shell_color.clone(), white.clone(), shell_color.clone()], 5, false)
+                    .map_err(EngineError::Other)?;
             for id in firework_shell {
                 let (input_symbol, input_fg, input_bg, uses_pre) = {
                     let ch = &ctx.terminal.arena[id.0 as usize];
@@ -306,9 +279,7 @@ impl Fireworks {
                 // bloom scene
                 let bloom_scn = {
                     let ch = &mut ctx.terminal.arena[id.0 as usize];
-                    let scene_id =
-                        ch.animation
-                            .new_scene(false, Some(SyncMetric::Step), None, "", uses_pre);
+                    let scene_id = ch.animation.new_scene(false, Some(SyncMetric::Step), None, "", uses_pre);
                     let scene = ch.animation.scenes.get_mut(&scene_id).unwrap();
                     for color in &shell_gradient.spectrum {
                         scene
@@ -327,8 +298,7 @@ impl Fireworks {
                 // fall scene
                 let fall_scn = {
                     let ch = &mut ctx.terminal.arena[id.0 as usize];
-                    ch.animation
-                        .new_scene(false, None, None, "fall_scn", uses_pre)
+                    ch.animation.new_scene(false, None, None, "fall_scn", uses_pre)
                 };
                 if dynamic {
                     let fg_gradient = match &input_fg {
@@ -361,10 +331,7 @@ impl Fireworks {
                             .add_frame(
                                 &input_symbol,
                                 10,
-                                VisualParams {
-                                    colors: Some(ColorPair::default()),
-                                    ..Default::default()
-                                },
+                                VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                             )
                             .map_err(EngineError::Other)?;
                     }
@@ -376,20 +343,14 @@ impl Fireworks {
                         .fg_color
                         .clone()
                         .expect("gradient mapping fg");
-                    let fall_gradient =
-                        Gradient::with_steps(&[shell_color.clone(), final_fg], 15, false)
-                            .map_err(EngineError::Other)?;
+                    let fall_gradient = Gradient::with_steps(&[shell_color.clone(), final_fg], 15, false)
+                        .map_err(EngineError::Other)?;
                     let ch = &mut ctx.terminal.arena[id.0 as usize];
                     ch.animation
                         .scenes
                         .get_mut(&fall_scn)
                         .unwrap()
-                        .apply_gradient_to_symbols(
-                            &[input_symbol.clone()],
-                            10,
-                            Some(&fall_gradient),
-                            None,
-                        )
+                        .apply_gradient_to_symbols(&[input_symbol.clone()], 10, Some(&fall_gradient), None)
                         .map_err(EngineError::Other)?;
                 }
                 ctx.activate_scene(self, id, &launch_scn);
@@ -414,13 +375,7 @@ impl Fireworks {
 }
 
 impl EffectHooks for Fireworks {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Fireworks {
@@ -428,16 +383,11 @@ impl Effect for Fireworks {
         // __init__ precomputations (no RNG)
         self.firework_volume = std::cmp::max(
             1,
-            round_half_even(
-                self.config.firework_volume * ctx.terminal.input_characters.len() as f64,
-            ),
+            round_half_even(self.config.firework_volume * ctx.terminal.input_characters.len() as f64),
         );
         self.explode_distance = std::cmp::min(
             15,
-            std::cmp::max(
-                1,
-                round_half_even(ctx.terminal.canvas.right as f64 * self.config.explode_distance),
-            ),
+            std::cmp::max(1, round_half_even(ctx.terminal.canvas.right as f64 * self.config.explode_distance)),
         );
         self.launch_delay = 0;
         self.prepare_waypoints(ctx)?;
@@ -454,8 +404,7 @@ impl Effect for Fireworks {
                     ctx.active_characters.insert(id);
                 }
                 // int(launch_delay * uniform(0.5, 1.5)) — truncation
-                self.launch_delay =
-                    (self.config.launch_delay as f64 * ctx.rng.uniform(0.5, 1.5)) as i64;
+                self.launch_delay = (self.config.launch_delay as f64 * ctx.rng.uniform(0.5, 1.5)) as i64;
             }
             self.launch_delay -= 1;
             ctx.update(self);

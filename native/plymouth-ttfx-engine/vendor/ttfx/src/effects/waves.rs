@@ -87,49 +87,30 @@ pub struct Waves {
 
 impl Waves {
     pub fn new(config: WavesConfig) -> Self {
-        Waves {
-            config,
-            pending_columns: Vec::new(),
-            character_final_color_map: HashMap::new(),
-        }
+        Waves { config, pending_columns: Vec::new(), character_final_color_map: HashMap::new() }
     }
 }
 
 impl EffectHooks for Waves {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Waves {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
-        let wave_gradient = Gradient::new(
-            &self.config.wave_gradient_stops,
-            &self.config.wave_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let wave_gradient =
+            Gradient::new(&self.config.wave_gradient_stops, &self.config.wave_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
 
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord, input_symbol, uses_pre) = {
@@ -145,23 +126,13 @@ impl Effect for Waves {
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
-            self.character_final_color_map
-                .insert(id, final_colors.clone());
+            self.character_final_color_map.insert(id, final_colors.clone());
 
             let wave_scn = {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                let scene_id = ch.animation.new_scene(
-                    false,
-                    None,
-                    Some(self.config.wave_easing),
-                    "",
-                    uses_pre,
-                );
+                let scene_id = ch.animation.new_scene(false, None, Some(self.config.wave_easing), "", uses_pre);
                 let scene = ch.animation.scenes.get_mut(&scene_id).unwrap();
                 for _ in 0..self.config.wave_count {
                     scene
@@ -191,10 +162,7 @@ impl Effect for Waves {
                         .add_frame(
                             &input_symbol,
                             10,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 } else {
@@ -246,12 +214,10 @@ impl Effect for Waves {
                     }
                 }
             } else {
-                let final_fg_color = final_colors.fg_color.clone().expect("gradient mapping fg");
+                let final_fg_color =
+                    final_colors.fg_color.clone().expect("gradient mapping fg");
                 let final_scene_gradient = Gradient::new(
-                    &[
-                        wave_gradient.spectrum.last().unwrap().clone(),
-                        final_fg_color,
-                    ],
+                    &[wave_gradient.spectrum.last().unwrap().clone(), final_fg_color],
                     &self.config.final_gradient_steps,
                     false,
                     false,
@@ -283,19 +249,11 @@ impl Effect for Waves {
             if dynamic {
                 let final_colors = self.character_final_color_map.get(&id).unwrap().clone();
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.animation.set_appearance(
-                    &input_symbol,
-                    uses_pre,
-                    Some(&input_symbol),
-                    Some(final_colors),
-                );
+                ch.animation.set_appearance(&input_symbol, uses_pre, Some(&input_symbol), Some(final_colors));
             }
         }
 
-        for column in ctx
-            .terminal
-            .get_characters_grouped(CharacterFilter::default(), self.config.wave_direction)
-        {
+        for column in ctx.terminal.get_characters_grouped(CharacterFilter::default(), self.config.wave_direction) {
             self.pending_columns.push(column);
         }
         Ok(())

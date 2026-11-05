@@ -6,8 +6,7 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_gradient_direction, parse_gradient_steps, parse_non_negative_ratio,
-    parse_positive_int_range,
+    parse_gradient_direction, parse_gradient_steps, parse_non_negative_ratio, parse_positive_int_range,
 };
 use crate::engine::animation::{ExistingColorHandling, SyncMetric, VisualParams};
 use crate::engine::character::CharId;
@@ -84,8 +83,7 @@ impl Swarm {
     fn make_swarms(&mut self, ctx: &mut EngineCtx, swarm_size: i64) {
         let mut unswarmed_characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::BottomToTopRightToLeft)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::BottomToTopRightToLeft)
         };
         while !unswarmed_characters.is_empty() {
             let mut new_swarm: Vec<CharId> = Vec::new();
@@ -112,20 +110,11 @@ impl Swarm {
 
 /// int(s[0]) on a path id string (effect_swarm.py's first-character parse).
 fn first_char_digit(s: &str) -> i64 {
-    s.chars()
-        .next()
-        .and_then(|c| c.to_digit(10))
-        .expect("path id must start with a digit") as i64
+    s.chars().next().and_then(|c| c.to_digit(10)).expect("path id must start with a digit") as i64
 }
 
 impl EffectHooks for Swarm {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Swarm {
@@ -134,21 +123,14 @@ impl Effect for Swarm {
         let dynamic_clear_color = Color::from_hex("#ffffff").unwrap();
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
-        let swarm_size: i64 = std::cmp::max(
-            round_half_even(characters.len() as f64 * self.config.swarm_size),
-            1,
-        );
+        let swarm_size: i64 =
+            std::cmp::max(round_half_even(characters.len() as f64 * self.config.swarm_size), 1);
         self.make_swarms(ctx, swarm_size);
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -156,15 +138,9 @@ impl Effect for Swarm {
         for &id in &characters {
             let ch = &ctx.terminal.arena[id.0 as usize];
             let final_colors = if dynamic {
-                ColorPair::new(
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                )
+                ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&ch.input_coord).unwrap().clone()), None)
             };
             self.character_final_color_map.insert(id, final_colors);
         }
@@ -176,9 +152,8 @@ impl Effect for Swarm {
         for swarm_index in 0..self.swarms.len() {
             let swarm = self.swarms[swarm_index].clone();
             let base = ctx.rng.choice(&self.config.base_color).clone();
-            let swarm_gradient =
-                Gradient::with_steps(&[base, self.config.flash_color.clone()], 7, false)
-                    .map_err(EngineError::Other)?;
+            let swarm_gradient = Gradient::with_steps(&[base, self.config.flash_color.clone()], 7, false)
+                .map_err(EngineError::Other)?;
             let swarm_gradient_mirror: Vec<Color> = swarm_gradient
                 .spectrum
                 .iter()
@@ -190,10 +165,8 @@ impl Effect for Swarm {
             let mut swarm_area_coordinate_map: Vec<(Coord, Vec<Coord>)> = Vec::new();
             let swarm_spawn = ctx.terminal.canvas.random_coord(&mut ctx.rng, true, false);
             let mut swarm_areas: Vec<Coord> = Vec::new();
-            let swarm_area_count = ctx.rng.randint(
-                self.config.swarm_area_count_range.0,
-                self.config.swarm_area_count_range.1,
-            );
+            let swarm_area_count =
+                ctx.rng.randint(self.config.swarm_area_count_range.0, self.config.swarm_area_count_range.1);
             // create areas where characters will swarm
             let mut last_focus_coord = swarm_spawn;
             let radius = std::cmp::max(floor_div(std::cmp::min(canvas_right, canvas_top), 2), 1);
@@ -204,9 +177,9 @@ impl Effect for Swarm {
                 // freshly computed one. Reproduce that observable quirk with an
                 // effect-local cache whose entries persist the shuffle mutation
                 // (the only in-process mutator of this cache is this loop).
-                let cached = circle_cache.entry(last_focus_coord).or_insert_with(|| {
-                    geometry::find_coords_on_circle(last_focus_coord, radius, 0, true)
-                });
+                let cached = circle_cache
+                    .entry(last_focus_coord)
+                    .or_insert_with(|| geometry::find_coords_on_circle(last_focus_coord, radius, 0, true));
                 ctx.rng.shuffle(cached);
                 let potential_focus_coords = cached.clone();
                 let mut next_focus_coord: Option<Coord> = None;
@@ -225,9 +198,8 @@ impl Effect for Swarm {
                     last_focus_coord,
                     std::cmp::max(floor_div(std::cmp::min(canvas_right, canvas_top), 6), 1) * 2,
                 );
-                if let Some(entry) = swarm_area_coordinate_map
-                    .iter_mut()
-                    .find(|(coord, _)| *coord == last_focus_coord)
+                if let Some(entry) =
+                    swarm_area_coordinate_map.iter_mut().find(|(coord, _)| *coord == last_focus_coord)
                 {
                     entry.1 = area_coords;
                 } else {
@@ -240,22 +212,12 @@ impl Effect for Swarm {
             for &id in &swarm {
                 let (input_coord, input_symbol, uses_pre) = {
                     let ch = &ctx.terminal.arena[id.0 as usize];
-                    (
-                        ch.input_coord,
-                        ch.input_symbol.clone(),
-                        ch.uses_input_preexisting_colors,
-                    )
+                    (ch.input_coord, ch.input_symbol.clone(), ch.uses_input_preexisting_colors)
                 };
                 let flash_scn = {
                     let ch = &mut ctx.terminal.arena[id.0 as usize];
                     ch.motion.set_coordinate(swarm_spawn);
-                    let scene_id = ch.animation.new_scene(
-                        false,
-                        Some(SyncMetric::Distance),
-                        None,
-                        "",
-                        uses_pre,
-                    );
+                    let scene_id = ch.animation.new_scene(false, Some(SyncMetric::Distance), None, "", uses_pre);
                     let scene = ch.animation.scenes.get_mut(&scene_id).unwrap();
                     for step in &swarm_gradient_mirror {
                         scene
@@ -271,9 +233,7 @@ impl Effect for Swarm {
                     }
                     scene_id
                 };
-                for (swarm_area_count, (_, swarm_area_coords)) in
-                    swarm_area_coordinate_map.iter().enumerate()
-                {
+                for (swarm_area_count, (_, swarm_area_coords)) in swarm_area_coordinate_map.iter().enumerate() {
                     let swarm_area_name = format!("{swarm_area_count}_swarm_area");
                     let origin_waypoint_coord = *ctx.rng.choice(swarm_area_coords);
                     {
@@ -319,14 +279,7 @@ impl Effect for Swarm {
                         let inner_path_id = ch.motion.paths.len().to_string();
                         let inner_path = ch
                             .motion
-                            .new_path(
-                                0.18,
-                                Some(Easing::InOutSine),
-                                None,
-                                0,
-                                false,
-                                &inner_path_id,
-                            )
+                            .new_path(0.18, Some(Easing::InOutSine), None, 0, false, &inner_path_id)
                             .map_err(EngineError::Other)?;
                         let waypoint_id = ch.motion.paths.len().to_string();
                         ch.motion
@@ -383,32 +336,21 @@ impl Effect for Swarm {
                             .add_frame(
                                 &input_symbol,
                                 3,
-                                VisualParams {
-                                    colors: Some(ColorPair::default()),
-                                    ..Default::default()
-                                },
+                                VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                             )
                             .map_err(EngineError::Other)?;
                     } else {
                         let fg_gradient = match &final_colors.fg_color {
                             Some(fg) => Some(
-                                Gradient::with_steps(
-                                    &[self.config.flash_color.clone(), fg.clone()],
-                                    10,
-                                    false,
-                                )
-                                .map_err(EngineError::Other)?,
+                                Gradient::with_steps(&[self.config.flash_color.clone(), fg.clone()], 10, false)
+                                    .map_err(EngineError::Other)?,
                             ),
                             None => None,
                         };
                         let bg_gradient = match &final_colors.bg_color {
                             Some(bg) => Some(
-                                Gradient::with_steps(
-                                    &[self.config.flash_color.clone(), bg.clone()],
-                                    10,
-                                    false,
-                                )
-                                .map_err(EngineError::Other)?,
+                                Gradient::with_steps(&[self.config.flash_color.clone(), bg.clone()], 10, false)
+                                    .map_err(EngineError::Other)?,
                             ),
                             None => None,
                         };
@@ -427,12 +369,9 @@ impl Effect for Swarm {
                     }
                 } else {
                     let final_fg = final_colors.fg_color.clone().expect("gradient mapping fg");
-                    let landing_gradient = Gradient::with_steps(
-                        &[self.config.flash_color.clone(), final_fg],
-                        10,
-                        false,
-                    )
-                    .map_err(EngineError::Other)?;
+                    let landing_gradient =
+                        Gradient::with_steps(&[self.config.flash_color.clone(), final_fg], 10, false)
+                            .map_err(EngineError::Other)?;
                     let ch = &mut ctx.terminal.arena[id.0 as usize];
                     let scene = ch.animation.scenes.get_mut(&input_scn).unwrap();
                     for step in &landing_gradient.spectrum {
@@ -473,8 +412,7 @@ impl Effect for Swarm {
                     let ch = &ctx.terminal.arena[id.0 as usize];
                     ch.motion.paths.keys().map(|key| key.to_string()).collect()
                 };
-                ctx.chain_paths(id, &all_paths, false)
-                    .map_err(EngineError::Other)?;
+                ctx.chain_paths(id, &all_paths, false).map_err(EngineError::Other)?;
             }
         }
         self.call_next = true;
@@ -501,18 +439,15 @@ impl Effect for Swarm {
             if !self.current_swarm.is_empty() {
                 for i in 0..self.current_swarm.len() {
                     let id = self.current_swarm[i];
-                    let active_path_id =
-                        ctx.terminal.arena[id.0 as usize].motion.active_path.clone();
+                    let active_path_id = ctx.terminal.arena[id.0 as usize].motion.active_path.clone();
                     if let Some(path_id) = active_path_id {
                         if path_id.as_ref() != self.active_swarm_area
                             && path_id.contains("swarm_area")
-                            && first_char_digit(&path_id)
-                                > first_char_digit(&self.active_swarm_area)
+                            && first_char_digit(&path_id) > first_char_digit(&self.active_swarm_area)
                         {
                             self.active_swarm_area = path_id.to_string();
                             for &other in &self.current_swarm.clone() {
-                                if other != id && ctx.rng.random() < self.config.swarm_coordination
-                                {
+                                if other != id && ctx.rng.random() < self.config.swarm_coordination {
                                     let area = self.active_swarm_area.clone();
                                     ctx.activate_path(self, other, &area);
                                 }

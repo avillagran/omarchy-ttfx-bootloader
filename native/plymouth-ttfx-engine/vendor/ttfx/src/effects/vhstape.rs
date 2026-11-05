@@ -120,11 +120,7 @@ impl VhsTape {
     /// Line.build_line_effects — one offset/direction/hold_time draw per line,
     /// then paths, scenes (snow draws 25x2, final_snow 30x2), and events per
     /// character.
-    fn build_line_effects(
-        &mut self,
-        ctx: &mut EngineCtx,
-        characters: &[CharId],
-    ) -> Result<(), EngineError> {
+    fn build_line_effects(&mut self, ctx: &mut EngineCtx, characters: &[CharId]) -> Result<(), EngineError> {
         let glitch_line_colors = self.config.glitch_line_colors.clone();
         let snow_chars = ["#", "*", ".", ":"];
         let noise_colors = self.config.noise_colors.clone();
@@ -134,21 +130,15 @@ impl VhsTape {
         for &id in characters {
             let (input_coord, input_symbol, uses_pre) = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
-                (
-                    ch.input_coord,
-                    ch.input_symbol.clone(),
-                    ch.uses_input_preexisting_colors,
-                )
+                (ch.input_coord, ch.input_symbol.clone(), ch.uses_input_preexisting_colors)
             };
             let stable_colors = self.character_stable_color_map.get(&id).unwrap().clone();
             let final_colors = self.character_final_color_map.get(&id).unwrap().clone();
             // make glitch and restore waypoints + glitch wave waypoints
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                let glitch_path = ch
-                    .motion
-                    .new_path(2.0, None, None, hold_time, false, "glitch")
-                    .map_err(EngineError::Other)?;
+                let glitch_path =
+                    ch.motion.new_path(2.0, None, None, hold_time, false, "glitch").map_err(EngineError::Other)?;
                 ch.motion
                     .paths
                     .get_mut(&glitch_path)
@@ -159,43 +149,29 @@ impl VhsTape {
                         "glitch",
                     )
                     .map_err(EngineError::Other)?;
-                let restore_path = ch
-                    .motion
-                    .new_path(2.0, None, None, 0, false, "restore")
-                    .map_err(EngineError::Other)?;
+                let restore_path =
+                    ch.motion.new_path(2.0, None, None, 0, false, "restore").map_err(EngineError::Other)?;
                 ch.motion
                     .paths
                     .get_mut(&restore_path)
                     .unwrap()
                     .new_waypoint(input_coord, None, "restore")
                     .map_err(EngineError::Other)?;
-                let mid_path = ch
-                    .motion
-                    .new_path(2.0, None, None, 0, false, "glitch_wave_mid")
-                    .map_err(EngineError::Other)?;
+                let mid_path =
+                    ch.motion.new_path(2.0, None, None, 0, false, "glitch_wave_mid").map_err(EngineError::Other)?;
                 ch.motion
                     .paths
                     .get_mut(&mid_path)
                     .unwrap()
-                    .new_waypoint(
-                        Coord::new(input_coord.column + 8, input_coord.row),
-                        None,
-                        "glitch_wave_mid",
-                    )
+                    .new_waypoint(Coord::new(input_coord.column + 8, input_coord.row), None, "glitch_wave_mid")
                     .map_err(EngineError::Other)?;
-                let end_path = ch
-                    .motion
-                    .new_path(2.0, None, None, 0, false, "glitch_wave_end")
-                    .map_err(EngineError::Other)?;
+                let end_path =
+                    ch.motion.new_path(2.0, None, None, 0, false, "glitch_wave_end").map_err(EngineError::Other)?;
                 ch.motion
                     .paths
                     .get_mut(&end_path)
                     .unwrap()
-                    .new_waypoint(
-                        Coord::new(input_coord.column + 14, input_coord.row),
-                        None,
-                        "glitch_wave_end",
-                    )
+                    .new_waypoint(Coord::new(input_coord.column + 14, input_coord.row), None, "glitch_wave_end")
                     .map_err(EngineError::Other)?;
             }
             // make glitch scenes
@@ -209,19 +185,11 @@ impl VhsTape {
                     .add_frame(
                         &input_symbol,
                         1,
-                        VisualParams {
-                            colors: Some(stable_colors.clone()),
-                            ..Default::default()
-                        },
+                        VisualParams { colors: Some(stable_colors.clone()), ..Default::default() },
                     )
                     .map_err(EngineError::Other)?;
-                let fwd_scn = ch.animation.new_scene(
-                    false,
-                    Some(SyncMetric::Step),
-                    None,
-                    "rgb_glitch_fwd",
-                    uses_pre,
-                );
+                let fwd_scn =
+                    ch.animation.new_scene(false, Some(SyncMetric::Step), None, "rgb_glitch_fwd", uses_pre);
                 let scene = ch.animation.scenes.get_mut(&fwd_scn).unwrap();
                 for color in &glitch_line_colors {
                     scene
@@ -235,13 +203,8 @@ impl VhsTape {
                         )
                         .map_err(EngineError::Other)?;
                 }
-                let bwd_scn = ch.animation.new_scene(
-                    false,
-                    Some(SyncMetric::Step),
-                    None,
-                    "rgb_glitch_bwd",
-                    uses_pre,
-                );
+                let bwd_scn =
+                    ch.animation.new_scene(false, Some(SyncMetric::Step), None, "rgb_glitch_bwd", uses_pre);
                 let scene = ch.animation.scenes.get_mut(&bwd_scn).unwrap();
                 for color in glitch_line_colors.iter().rev() {
                     scene
@@ -268,10 +231,7 @@ impl VhsTape {
                     .add_frame(
                         symbol,
                         2,
-                        VisualParams {
-                            colors: Some(ColorPair::new(Some(color), None)),
-                            ..Default::default()
-                        },
+                        VisualParams { colors: Some(ColorPair::new(Some(color), None)), ..Default::default() },
                     )
                     .map_err(EngineError::Other)?;
             }
@@ -284,40 +244,24 @@ impl VhsTape {
                     .add_frame(
                         &input_symbol,
                         1,
-                        VisualParams {
-                            colors: Some(stable_colors.clone()),
-                            ..Default::default()
-                        },
+                        VisualParams { colors: Some(stable_colors.clone()), ..Default::default() },
                     )
                     .map_err(EngineError::Other)?;
-                ch.animation
-                    .new_scene(false, None, None, "final_snow", uses_pre);
-                let redraw_scn =
-                    ch.animation
-                        .new_scene(false, None, None, "final_redraw", uses_pre);
+                ch.animation.new_scene(false, None, None, "final_snow", uses_pre);
+                let redraw_scn = ch.animation.new_scene(false, None, None, "final_redraw", uses_pre);
                 let scene = ch.animation.scenes.get_mut(&redraw_scn).unwrap();
                 scene
                     .add_frame(
                         "█",
                         6,
                         VisualParams {
-                            colors: Some(ColorPair::new(
-                                Some(Color::from_hex("ffffff").unwrap()),
-                                None,
-                            )),
+                            colors: Some(ColorPair::new(Some(Color::from_hex("ffffff").unwrap()), None)),
                             ..Default::default()
                         },
                     )
                     .map_err(EngineError::Other)?;
                 scene
-                    .add_frame(
-                        &input_symbol,
-                        1,
-                        VisualParams {
-                            colors: Some(final_colors),
-                            ..Default::default()
-                        },
-                    )
+                    .add_frame(&input_symbol, 1, VisualParams { colors: Some(final_colors), ..Default::default() })
                     .map_err(EngineError::Other)?;
             }
             for _ in 0..30 {
@@ -331,10 +275,7 @@ impl VhsTape {
                     .add_frame(
                         symbol,
                         2,
-                        VisualParams {
-                            colors: Some(ColorPair::new(Some(color), None)),
-                            ..Default::default()
-                        },
+                        VisualParams { colors: Some(ColorPair::new(Some(color), None)), ..Default::default() },
                     )
                     .map_err(EngineError::Other)?;
             }
@@ -396,12 +337,8 @@ impl VhsTape {
     /// Line.set_hold_time.
     fn line_set_hold_time(&mut self, ctx: &mut EngineCtx, idx: usize, hold_time: i64) {
         for &id in &self.lines[idx].characters {
-            ctx.terminal.arena[id.0 as usize]
-                .motion
-                .paths
-                .get_mut("glitch")
-                .expect("glitch path")
-                .hold_time = hold_time;
+            ctx.terminal.arena[id.0 as usize].motion.paths.get_mut("glitch").expect("glitch path").hold_time =
+                hold_time;
         }
     }
 
@@ -412,32 +349,16 @@ impl VhsTape {
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 if final_ {
-                    ch.motion
-                        .paths
-                        .get_mut("glitch")
-                        .expect("glitch path")
-                        .hold_time = 0;
-                    ch.motion
-                        .paths
-                        .get_mut("restore")
-                        .expect("restore path")
-                        .hold_time = 0;
+                    ch.motion.paths.get_mut("glitch").expect("glitch path").hold_time = 0;
+                    ch.motion.paths.get_mut("restore").expect("restore path").hold_time = 0;
                 }
             }
             let glitch_speed = 40.0 / ctx.rng.randint(20, 40) as f64;
             let restore_speed = 40.0 / ctx.rng.randint(20, 40) as f64;
             {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.motion
-                    .paths
-                    .get_mut("glitch")
-                    .expect("glitch path")
-                    .speed = glitch_speed;
-                ch.motion
-                    .paths
-                    .get_mut("restore")
-                    .expect("restore path")
-                    .speed = restore_speed;
+                ch.motion.paths.get_mut("glitch").expect("glitch path").speed = glitch_speed;
+                ch.motion.paths.get_mut("restore").expect("restore path").speed = restore_speed;
             }
             ctx.activate_path(self, id, "glitch");
         }
@@ -448,12 +369,8 @@ impl VhsTape {
         let characters = self.lines[idx].characters.clone();
         for id in characters {
             let restore_speed = 40.0 / ctx.rng.randint(20, 40) as f64;
-            ctx.terminal.arena[id.0 as usize]
-                .motion
-                .paths
-                .get_mut("restore")
-                .expect("restore path")
-                .speed = restore_speed;
+            ctx.terminal.arena[id.0 as usize].motion.paths.get_mut("restore").expect("restore path").speed =
+                restore_speed;
             ctx.activate_path(self, id, "restore");
         }
     }
@@ -468,11 +385,7 @@ impl VhsTape {
 
     /// Line.line_movement_complete.
     fn line_movement_complete(&self, ctx: &EngineCtx, idx: usize) -> bool {
-        self.lines[idx].characters.iter().all(|&id| {
-            ctx.terminal.arena[id.0 as usize]
-                .motion
-                .movement_is_complete()
-        })
+        self.lines[idx].characters.iter().all(|&id| ctx.terminal.arena[id.0 as usize].motion.movement_is_complete())
     }
 
     fn insert_line_characters(&self, ctx: &mut EngineCtx, idx: usize) {
@@ -488,13 +401,9 @@ impl VhsTape {
         if matches!(self.active_glitch_wave_top, None | Some(0)) {
             if ctx.terminal.canvas.text_height >= 3 {
                 // choose a wave top index in the top half of the canvas or at least 3 rows up
-                let lower = std::cmp::max(
-                    3,
-                    round_half_even(ctx.terminal.canvas.text_height as f64 * 0.5),
-                );
+                let lower = std::cmp::max(3, round_half_even(ctx.terminal.canvas.text_height as f64 * 0.5));
                 self.active_glitch_wave_top = Some(
-                    ctx.terminal.canvas.text_bottom
-                        + ctx.rng.randint(lower, ctx.terminal.canvas.text_height),
+                    ctx.terminal.canvas.text_bottom + ctx.rng.randint(lower, ctx.terminal.canvas.text_height),
                 );
             } else {
                 // not enough room for a wave
@@ -503,24 +412,15 @@ impl VhsTape {
         }
 
         // if all lines have completed movement, proceed to move/restore wave
-        let all_complete = self
-            .active_glitch_wave_lines
-            .iter()
-            .all(|&idx| self.line_movement_complete(ctx, idx));
+        let all_complete =
+            self.active_glitch_wave_lines.iter().all(|&idx| self.line_movement_complete(ctx, idx));
         if all_complete {
             if !self.active_glitch_wave_lines.is_empty() {
                 // only move 30% of the time — the OUTER conditional's condition is
                 // evaluated first (second textual random() call in the source)
                 let should_move = ctx.rng.random() < 0.3;
-                let wave_top_delta = if should_move {
-                    if ctx.rng.random() < 0.3 {
-                        1
-                    } else {
-                        -1
-                    }
-                } else {
-                    0
-                };
+                let wave_top_delta =
+                    if should_move { if ctx.rng.random() < 0.3 { 1 } else { -1 } } else { 0 };
                 let mut top = self.active_glitch_wave_top.unwrap() + wave_top_delta;
                 // clamp wave top to canvas
                 top = std::cmp::max(2, std::cmp::min(top, ctx.terminal.canvas.text_top));
@@ -567,32 +467,21 @@ impl VhsTape {
 }
 
 impl EffectHooks for VhsTape {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for VhsTape {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let ch = &ctx.terminal.arena[id.0 as usize];
@@ -600,18 +489,13 @@ impl Effect for VhsTape {
                 let input_fg = ch.animation.input_fg_color.clone();
                 let input_bg = ch.animation.input_bg_color.clone();
                 // DYNAMIC_NEUTRAL_GRAY
-                let stable_fg = input_fg
-                    .clone()
-                    .or_else(|| Some(Color::from_hex("808080").unwrap()));
-                self.character_stable_color_map
-                    .insert(id, ColorPair::new(stable_fg, input_bg.clone()));
-                self.character_final_color_map
-                    .insert(id, ColorPair::new(input_fg, input_bg));
+                let stable_fg = input_fg.clone().or_else(|| Some(Color::from_hex("808080").unwrap()));
+                self.character_stable_color_map.insert(id, ColorPair::new(stable_fg, input_bg.clone()));
+                self.character_final_color_map.insert(id, ColorPair::new(input_fg, input_bg));
             } else {
                 let gradient_color = final_gradient_mapping.get(&ch.input_coord).unwrap().clone();
                 let stable_colors = ColorPair::new(Some(gradient_color), None);
-                self.character_stable_color_map
-                    .insert(id, stable_colors.clone());
+                self.character_stable_color_map.insert(id, stable_colors.clone());
                 self.character_final_color_map.insert(id, stable_colors);
             }
         }
@@ -624,8 +508,7 @@ impl Effect for VhsTape {
         }
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             ctx.terminal.set_character_visibility(id, true);
@@ -646,23 +529,16 @@ impl Effect for VhsTape {
             Phase::Glitching => {
                 // Check if all active glitch wave lines have completed their movement, if so move the wave
                 if self.active_glitch_wave_lines.is_empty()
-                    || self
-                        .active_glitch_wave_lines
-                        .iter()
-                        .all(|&idx| self.line_movement_complete(ctx, idx))
+                    || self.active_glitch_wave_lines.iter().all(|&idx| self.line_movement_complete(ctx, idx))
                 {
                     self.glitch_wave(ctx);
                 }
                 // Remove completed glitch lines from active glitch lines
                 let glitch_lines = std::mem::take(&mut self.active_glitch_lines);
-                self.active_glitch_lines = glitch_lines
-                    .into_iter()
-                    .filter(|&idx| !self.line_movement_complete(ctx, idx))
-                    .collect();
+                self.active_glitch_lines =
+                    glitch_lines.into_iter().filter(|&idx| !self.line_movement_complete(ctx, idx)).collect();
                 // Randomly add new glitch lines
-                if ctx.rng.random() < self.config.glitch_line_chance
-                    && self.active_glitch_lines.len() < 3
-                {
+                if ctx.rng.random() < self.config.glitch_line_chance && self.active_glitch_lines.len() < 3 {
                     let glitch_line = ctx.rng.choice_index(self.lines.len());
                     if !self.active_glitch_wave_lines.contains(&glitch_line)
                         && !self.active_glitch_lines.contains(&glitch_line)
@@ -706,11 +582,7 @@ impl Effect for VhsTape {
                 if ctx.active_characters.is_empty() {
                     let characters = {
                         let filter = CharacterFilter::default();
-                        ctx.terminal.get_characters(
-                            &mut ctx.rng,
-                            filter,
-                            CharacterSort::TopToBottomLeftToRight,
-                        )
+                        ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
                     };
                     for id in characters {
                         ctx.activate_scene(self, id, "final_snow");

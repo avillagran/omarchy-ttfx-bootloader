@@ -24,28 +24,14 @@ pub fn link_characters(ctx: &mut EngineCtx, a: CharId, b: CharId) {
 
 /// SpanningTreeGenerator.get_neighbors: neighbors in dict order (north, east,
 /// south, west), optional text-boundary and unlinked filters.
-fn get_neighbors(
-    ctx: &EngineCtx,
-    id: CharId,
-    unlinked_only: bool,
-    limit_to_text_boundary: bool,
-) -> Vec<CharId> {
+fn get_neighbors(ctx: &EngineCtx, id: CharId, unlinked_only: bool, limit_to_text_boundary: bool) -> Vec<CharId> {
     let ch = &ctx.terminal.arena[id.0 as usize];
-    let mut neighbors: Vec<CharId> = [
-        ch.neighbors.north,
-        ch.neighbors.east,
-        ch.neighbors.south,
-        ch.neighbors.west,
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    let mut neighbors: Vec<CharId> = [ch.neighbors.north, ch.neighbors.east, ch.neighbors.south, ch.neighbors.west]
+        .into_iter()
+        .flatten()
+        .collect();
     if limit_to_text_boundary {
-        neighbors.retain(|&n| {
-            ctx.terminal
-                .canvas
-                .coord_is_in_text(ctx.terminal.arena[n.0 as usize].input_coord)
-        });
+        neighbors.retain(|&n| ctx.terminal.canvas.coord_is_in_text(ctx.terminal.arena[n.0 as usize].input_coord));
     }
     if unlinked_only {
         neighbors.retain(|&n| ctx.terminal.arena[n.0 as usize].links.is_empty());
@@ -53,14 +39,8 @@ fn get_neighbors(
     neighbors
 }
 
-fn default_starting_char(
-    ctx: &mut EngineCtx,
-    within_text_boundary: bool,
-) -> Result<CharId, String> {
-    let coord = ctx
-        .terminal
-        .canvas
-        .random_coord(&mut ctx.rng, false, within_text_boundary);
+fn default_starting_char(ctx: &mut EngineCtx, within_text_boundary: bool) -> Result<CharId, String> {
+    let coord = ctx.terminal.canvas.random_coord(&mut ctx.rng, false, within_text_boundary);
     ctx.terminal
         .get_character_by_input_coord(coord)
         .ok_or_else(|| "Unable to find a starting character.".to_string())
@@ -107,8 +87,7 @@ impl PrimsSimple {
             let idx = ctx.rng.randrange(0, self.edge_chars.len() as i64) as usize;
             self.current_char = self.edge_chars.remove(idx);
             self.edge_last_popped = Some(self.current_char);
-            let mut unlinked_neighbors =
-                get_neighbors(ctx, self.current_char, true, self.limit_to_text_boundary);
+            let mut unlinked_neighbors = get_neighbors(ctx, self.current_char, true, self.limit_to_text_boundary);
             if !unlinked_neighbors.is_empty() {
                 let idx = ctx.rng.randrange(0, unlinked_neighbors.len() as i64) as usize;
                 let next_char = unlinked_neighbors.remove(idx);
@@ -118,8 +97,7 @@ impl PrimsSimple {
                 if !unlinked_neighbors.is_empty() {
                     self.edge_chars.push(self.current_char);
                 }
-                let next_neighbors =
-                    get_neighbors(ctx, next_char, true, self.limit_to_text_boundary);
+                let next_neighbors = get_neighbors(ctx, next_char, true, self.limit_to_text_boundary);
                 if !next_neighbors.is_empty() {
                     self.edge_chars.push(next_char);
                     self.edge_last_added = Some(next_char);
@@ -202,11 +180,7 @@ impl PrimsWeighted {
             self.pending_weighted_links
                 .entry(weight)
                 .or_default()
-                .push(WeightedLink {
-                    char_a: char_id,
-                    char_b: neighbor,
-                    weight,
-                });
+                .push(WeightedLink { char_a: char_id, char_b: neighbor, weight });
         }
     }
 
@@ -280,8 +254,7 @@ impl RecursiveBacktracker {
         self.char_last_linked = None;
         self.stack_last_popped = None;
         if !self.stack.is_empty() {
-            let unvisited =
-                get_neighbors(ctx, self.current_char, true, self.limit_to_text_boundary);
+            let unvisited = get_neighbors(ctx, self.current_char, true, self.limit_to_text_boundary);
             if !unvisited.is_empty() {
                 let next_char = *ctx.rng.choice(&unvisited);
                 link_characters(ctx, self.current_char, next_char);
@@ -345,11 +318,7 @@ impl BreadthFirst {
             let links = ctx.terminal.arena[position.0 as usize].links.clone();
             let position_new_edges: Vec<CharId> = links
                 .into_iter()
-                .filter(|n| {
-                    !self.explored.contains(n)
-                        && !self.frontier.contains(n)
-                        && !new_edges.contains(n)
-                })
+                .filter(|n| !self.explored.contains(n) && !self.frontier.contains(n) && !new_edges.contains(n))
                 .collect();
             for &character in &position_new_edges {
                 self.explored.insert(character);

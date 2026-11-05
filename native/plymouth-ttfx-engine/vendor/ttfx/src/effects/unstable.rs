@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use clap::Args;
 
 use crate::cli::parse_color;
-use crate::effects::common::{
-    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float,
-};
+use crate::effects::common::{parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float};
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
 use crate::engine::ctx::{EffectHooks, EngineCtx};
@@ -98,47 +96,30 @@ fn neutral_gray() -> Color {
 }
 
 impl EffectHooks for Unstable {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Unstable {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for &id in &characters {
             let ch = &ctx.terminal.arena[id.0 as usize];
             let (start_colors, final_colors) = if dynamic {
-                let start_fg_color = ch
-                    .animation
-                    .input_fg_color
-                    .clone()
-                    .unwrap_or_else(neutral_gray);
+                let start_fg_color =
+                    ch.animation.input_fg_color.clone().unwrap_or_else(neutral_gray);
                 (
                     ColorPair::new(Some(start_fg_color), ch.animation.input_bg_color.clone()),
-                    ColorPair::new(
-                        ch.animation.input_fg_color.clone(),
-                        ch.animation.input_bg_color.clone(),
-                    ),
+                    ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone()),
                 )
             } else {
                 let start = ColorPair::new(
@@ -150,10 +131,8 @@ impl Effect for Unstable {
             self.character_start_color_map.insert(id, start_colors);
             self.character_final_color_map.insert(id, final_colors);
         }
-        let mut character_coords: Vec<Coord> = characters
-            .iter()
-            .map(|&id| ctx.terminal.arena[id.0 as usize].input_coord)
-            .collect();
+        let mut character_coords: Vec<Coord> =
+            characters.iter().map(|&id| ctx.terminal.arena[id.0 as usize].input_coord).collect();
         for &id in &characters {
             let pos = ctx.rng.randint(0, 3);
             let (col, row) = match pos {
@@ -178,8 +157,8 @@ impl Effect for Unstable {
                     (col, row)
                 }
             };
-            let jumbled_coord = character_coords
-                .remove(ctx.rng.randint(0, character_coords.len() as i64 - 1) as usize);
+            let jumbled_coord =
+                character_coords.remove(ctx.rng.randint(0, character_coords.len() as i64 - 1) as usize);
             self.jumbled_coords.insert(id, jumbled_coord);
             let (input_symbol, input_coord, uses_pre) = {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
@@ -219,8 +198,7 @@ impl Effect for Unstable {
                     .unwrap()
                     .new_waypoint(input_coord, None, "")
                     .map_err(EngineError::Other)?;
-                ch.animation
-                    .new_scene(false, None, None, "rumble", uses_pre_of(ch));
+                ch.animation.new_scene(false, None, None, "rumble", uses_pre_of(ch));
                 (ch.input_symbol.clone(), input_coord, uses_pre_of(ch))
             };
             let _ = input_coord;
@@ -228,12 +206,9 @@ impl Effect for Unstable {
                 let start_pair = self.character_start_color_map.get(&id).unwrap().clone();
                 let start_fg_color = start_pair.fg_color.clone().unwrap_or_else(neutral_gray);
                 let start_bg_color = start_pair.bg_color.clone();
-                let fg_gradient = Gradient::with_steps(
-                    &[start_fg_color, self.config.unstable_color.clone()],
-                    12,
-                    false,
-                )
-                .map_err(EngineError::Other)?;
+                let fg_gradient =
+                    Gradient::with_steps(&[start_fg_color, self.config.unstable_color.clone()], 12, false)
+                        .map_err(EngineError::Other)?;
                 let bg_gradient = match start_bg_color {
                     Some(bg) => Some(
                         Gradient::with_steps(&[bg, self.config.unstable_color.clone()], 12, false)
@@ -261,23 +236,15 @@ impl Effect for Unstable {
                     .fg_color
                     .clone()
                     .unwrap_or_else(neutral_gray);
-                let unstable_gradient = Gradient::with_steps(
-                    &[final_fg_color, self.config.unstable_color.clone()],
-                    12,
-                    false,
-                )
-                .map_err(EngineError::Other)?;
+                let unstable_gradient =
+                    Gradient::with_steps(&[final_fg_color, self.config.unstable_color.clone()], 12, false)
+                        .map_err(EngineError::Other)?;
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 ch.animation
                     .scenes
                     .get_mut("rumble")
                     .unwrap()
-                    .apply_gradient_to_symbols(
-                        &[input_symbol.clone()],
-                        10,
-                        Some(&unstable_gradient),
-                        None,
-                    )
+                    .apply_gradient_to_symbols(&[input_symbol.clone()], 10, Some(&unstable_gradient), None)
                     .map_err(EngineError::Other)?;
             }
             {
@@ -289,52 +256,33 @@ impl Effect for Unstable {
                 let final_fg_color = final_pair.fg_color.clone();
                 let final_bg_color = final_pair.bg_color.clone();
                 if final_fg_color.is_none() && final_bg_color.is_none() {
-                    let fg_gradient = Gradient::with_steps(
-                        &[self.config.unstable_color.clone(), neutral_gray()],
-                        12,
-                        false,
-                    )
-                    .map_err(EngineError::Other)?;
+                    let fg_gradient =
+                        Gradient::with_steps(&[self.config.unstable_color.clone(), neutral_gray()], 12, false)
+                            .map_err(EngineError::Other)?;
                     let ch = &mut ctx.terminal.arena[id.0 as usize];
                     let scene = ch.animation.scenes.get_mut("final").unwrap();
                     scene
-                        .apply_gradient_to_symbols(
-                            &[input_symbol.clone()],
-                            3,
-                            Some(&fg_gradient),
-                            None,
-                        )
+                        .apply_gradient_to_symbols(&[input_symbol.clone()], 3, Some(&fg_gradient), None)
                         .map_err(EngineError::Other)?;
                     scene
                         .add_frame(
                             &input_symbol,
                             3,
-                            VisualParams {
-                                colors: Some(ColorPair::default()),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 } else {
                     let fg_gradient = match &final_fg_color {
                         Some(fg) => Some(
-                            Gradient::with_steps(
-                                &[self.config.unstable_color.clone(), fg.clone()],
-                                12,
-                                false,
-                            )
-                            .map_err(EngineError::Other)?,
+                            Gradient::with_steps(&[self.config.unstable_color.clone(), fg.clone()], 12, false)
+                                .map_err(EngineError::Other)?,
                         ),
                         None => None,
                     };
                     let bg_gradient = match &final_bg_color {
                         Some(bg) => Some(
-                            Gradient::with_steps(
-                                &[self.config.unstable_color.clone(), bg.clone()],
-                                12,
-                                false,
-                            )
-                            .map_err(EngineError::Other)?,
+                            Gradient::with_steps(&[self.config.unstable_color.clone(), bg.clone()], 12, false)
+                                .map_err(EngineError::Other)?,
                         ),
                         None => None,
                     };
@@ -369,12 +317,9 @@ impl Effect for Unstable {
                     .fg_color
                     .clone()
                     .unwrap_or_else(neutral_gray);
-                let final_color = Gradient::with_steps(
-                    &[self.config.unstable_color.clone(), final_fg_color],
-                    12,
-                    false,
-                )
-                .map_err(EngineError::Other)?;
+                let final_color =
+                    Gradient::with_steps(&[self.config.unstable_color.clone(), final_fg_color], 12, false)
+                        .map_err(EngineError::Other)?;
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
                 ch.animation
                     .scenes
@@ -410,18 +355,12 @@ impl Effect for Unstable {
         let mut next_frame: Option<String> = None;
         if self.phase == Phase::Rumble {
             if self.current_rumble_steps < self.max_rumble_steps {
-                if self.current_rumble_steps > 30
-                    && self.current_rumble_steps % self.rumble_mod_delay == 0
-                {
+                if self.current_rumble_steps > 30 && self.current_rumble_steps % self.rumble_mod_delay == 0 {
                     let row_offset = *ctx.rng.choice(&[-1i64, 0, 1]);
                     let column_offset = *ctx.rng.choice(&[-1i64, 0, 1]);
                     let characters = {
                         let filter = CharacterFilter::default();
-                        ctx.terminal.get_characters(
-                            &mut ctx.rng,
-                            filter,
-                            CharacterSort::TopToBottomLeftToRight,
-                        )
+                        ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
                     };
                     for &id in &characters {
                         {
@@ -437,20 +376,14 @@ impl Effect for Unstable {
                     next_frame = Some(ctx.frame());
                     for &id in &characters {
                         let jumbled = *self.jumbled_coords.get(&id).unwrap();
-                        ctx.terminal.arena[id.0 as usize]
-                            .motion
-                            .set_coordinate(jumbled);
+                        ctx.terminal.arena[id.0 as usize].motion.set_coordinate(jumbled);
                     }
                     self.rumble_mod_delay -= 1;
                     self.rumble_mod_delay = self.rumble_mod_delay.max(1);
                 } else {
                     let characters = {
                         let filter = CharacterFilter::default();
-                        ctx.terminal.get_characters(
-                            &mut ctx.rng,
-                            filter,
-                            CharacterSort::TopToBottomLeftToRight,
-                        )
+                        ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
                     };
                     for &id in &characters {
                         ctx.step_animation(self, id);
@@ -462,11 +395,7 @@ impl Effect for Unstable {
                 self.phase = Phase::Explosion;
                 let characters = {
                     let filter = CharacterFilter::default();
-                    ctx.terminal.get_characters(
-                        &mut ctx.rng,
-                        filter,
-                        CharacterSort::TopToBottomLeftToRight,
-                    )
+                    ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
                 };
                 for &id in &characters {
                     ctx.activate_path(self, id, "explosion");
@@ -489,8 +418,7 @@ impl Effect for Unstable {
                     .iter()
                     .filter(|&id| {
                         let ch = &ctx.terminal.arena[id.0 as usize];
-                        let explosion_target =
-                            ch.motion.paths.get("explosion").unwrap().waypoints[0].coord;
+                        let explosion_target = ch.motion.paths.get("explosion").unwrap().waypoints[0].coord;
                         ch.motion.current_coord != explosion_target
                     })
                     .collect();
@@ -505,11 +433,7 @@ impl Effect for Unstable {
                 self.phase = Phase::Reassembly;
                 let characters = {
                     let filter = CharacterFilter::default();
-                    ctx.terminal.get_characters(
-                        &mut ctx.rng,
-                        filter,
-                        CharacterSort::TopToBottomLeftToRight,
-                    )
+                    ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
                 };
                 for &id in &characters {
                     ctx.activate_scene(self, id, "final");
@@ -531,10 +455,8 @@ impl Effect for Unstable {
                 .iter()
                 .filter(|&id| {
                     let ch = &ctx.terminal.arena[id.0 as usize];
-                    let reassembly_target =
-                        ch.motion.paths.get("reassembly").unwrap().waypoints[0].coord;
-                    ch.motion.current_coord != reassembly_target
-                        || !ch.animation.active_scene_is_complete()
+                    let reassembly_target = ch.motion.paths.get("reassembly").unwrap().waypoints[0].coord;
+                    ch.motion.current_coord != reassembly_target || !ch.animation.active_scene_is_complete()
                 })
                 .collect();
             ctx.active_characters.clear();

@@ -5,18 +5,12 @@ set -eEuo pipefail
 export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/usr/sbin
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-state_dir=/var/lib/omarchy-ttfx-bootloader
-helper=/usr/local/lib/omarchy-plymouth-ttfx-install
+# shellcheck source=scripts/common.sh
+source "$root/scripts/common.sh"
 arch=$(uname -m)
 new_install=false
+boot_changed=false
 committed=false
-runtime_commands=(
-  omarchy-plymouth-effect-list
-  omarchy-plymouth-effect-set
-  omarchy-plymouth-effect-switcher
-  omarchy-plymouth-playback-set
-)
-runtime_dirs=(/usr/share/omarchy/bin /usr/local/bin /usr/bin)
 
 case "$arch" in
   x86_64|aarch64) ;;
@@ -24,62 +18,17 @@ case "$arch" in
 esac
 
 command -v pacman >/dev/null || { echo "This installer supports Arch-based Omarchy systems only." >&2; exit 1; }
+[[ -d /usr/share/omarchy/default/plymouth && -f /usr/share/plymouth/themes/omarchy/omarchy.plymouth ]] ||
+  { echo "Omarchy's Plymouth theme is not installed." >&2; exit 1; }
 invoking_user=${SUDO_USER:-}
-[[ -n $invoking_user && $invoking_user != root ]] || { echo "Run with: curl ... | sudo bash" >&2; exit 1; }
+[[ -n $invoking_user && $invoking_user != root ]] || { echo "Run with: curl ... | bash (it enters sudo itself)" >&2; exit 1; }
 user_home=$(getent passwd "$invoking_user" | cut -d: -f6)
 [[ -n $user_home && -d $user_home ]] || { echo "Could not resolve the invoking user's home." >&2; exit 1; }
 user_group=$(id -gn "$invoking_user")
 menu_extension="$user_home/.config/omarchy/extensions/omarchy-menu.jsonc"
-audio_plugin="$user_home/.config/omarchy/plugins/io.github.avillagran.omarchy-audio-background"
-bridge_target="$audio_plugin/bin/ttfx-bg-rs-$arch"
-
-backup_name() {
-  printf '%s' "${1//\//_}"
-}
-
-backup_file() {
-  local path=$1 name
-  name=$(backup_name "$path")
-  [[ ! -e $state_dir/$name && ! -e $state_dir/$name.absent ]] || return 0
-  if [[ -e $path || -L $path ]]; then
-    cp -a --no-dereference "$path" "$state_dir/$name"
-  else
-    : >"$state_dir/$name.absent"
-  fi
-}
-
-restore_file() {
-  local path=$1 name
-  name=$(backup_name "$path")
-  if [[ -f $state_dir/$name.absent ]]; then
-    rm -f -- "$path"
-  elif [[ -e $state_dir/$name || -L $state_dir/$name ]]; then
-    install -d -m 0755 "${path%/*}"
-    cp -a --remove-destination "$state_dir/$name" "$path"
-  fi
-}
-
-managed_files() {
-  printf '%s\n' \
-    /usr/lib/plymouth/ttfx-plymouth.so \
-    /usr/share/plymouth/themes/omarchy/omarchy.plymouth \
-    /usr/share/omarchy/default/plymouth/omarchy.plymouth \
-    /usr/share/omarchy/default/plymouth/ttfx-effects.txt \
-    /etc/plymouth/plymouthd.conf \
-    /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf \
-    /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf \
-    "$helper" \
-    "$menu_extension"
-  local directory command
-  for directory in "${runtime_dirs[@]}"; do
-    for command in "${runtime_commands[@]}"; do
-      printf '%s/%s\n' "$directory" "$command"
-    done
-  done
-  [[ -d $audio_plugin ]] && printf '%s\n' "$bridge_target"
-}
 
 restore_initial_state() {
+  local path
   if $new_install && ! $committed; then
     while IFS= read -r path; do restore_file "$path"; done < <(managed_files)
     if [[ -f $state_dir/omarchy-static.absent ]]; then
@@ -88,21 +37,39 @@ restore_initial_state() {
       rm -rf -- /usr/share/plymouth/themes/omarchy-static
       cp -a --no-dereference "$state_dir/omarchy-static" /usr/share/plymouth/themes/omarchy-static
     fi
+    systemctl daemon-reload || true
+    if $boot_changed; then
+      plymouth-set-default-theme "$(<"$state_dir/previous-theme")" || true
+      rebuild_boot_images || true
+    fi
   fi
 }
 
 on_failure() {
   local status=$?
+  # errtrace hands this trap to every subshell, process substitutions
+  # included; only the installer itself may roll back.
+  (( BASHPID == $$ )) || exit "$status"
   trap - ERR HUP INT TERM
   restore_initial_state || true
   exit "$status"
 }
 trap on_failure ERR HUP INT TERM
 
+# The module builds with root's cargo, else with the invoking user's: rustup
+# lives in ~/.cargo/bin, and Arch's /usr/bin/cargo can be a rustup shim with
+# no default toolchain for root. Install Arch's rust only when neither works.
+user_path="$user_home/.cargo/bin:$PATH"
+user_cargo() {
+  runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" cargo "$@"
+}
 missing=()
-for package in base-devel rust pkgconf python plymouth; do
+for package in base-devel pkgconf python plymouth; do
   pacman -Q "$package" >/dev/null 2>&1 || missing+=("$package")
 done
+if ! cargo --version >/dev/null 2>&1 && ! user_cargo --version >/dev/null 2>&1; then
+  missing+=(rust)
+fi
 if (( ${#missing[@]} )); then
   if ! pacman -S --needed --noconfirm "${missing[@]}"; then
     printf 'Could not install prerequisites: %s\nRun `omarchy update` and retry.\n' "${missing[*]}" >&2
@@ -111,13 +78,37 @@ if (( ${#missing[@]} )); then
 fi
 install -d -m 0700 "$state_dir"
 
+# A failed first attempt leaves its backups and previous theme behind; they
+# still describe the system before this installer touched it.
 if [[ ! -f $state_dir/.installed ]]; then
   new_install=true
-  plymouth-set-default-theme >"$state_dir/previous-theme"
+  [[ -s $state_dir/previous-theme ]] || plymouth-set-default-theme >"$state_dir/previous-theme"
 fi
 [[ -f $state_dir/invoking-user ]] || printf '%s\n' "$invoking_user" >"$state_dir/invoking-user"
 [[ -f $state_dir/user-home ]] || printf '%s\n' "$user_home" >"$state_dir/user-home"
-while IFS= read -r path; do backup_file "$path"; done < <(managed_files)
+
+# Keep the original of each path across reinstalls, unless something other
+# than this installer replaced it since, such as an omarchy-settings update:
+# that newer file is the one an uninstall must give back.
+legacy_state=false
+if ! $new_install && [[ ! -f $installed_hashes ]]; then
+  legacy_state=true
+fi
+while IFS= read -r path; do
+  if ! has_backup "$path"; then
+    backup_file "$path"
+  elif $new_install; then
+    : # left by a failed first attempt, taken before anything changed
+  elif $legacy_state; then
+    # The 2026-09 installer recorded no hashes. Its package-file backups are
+    # stale once a package update put stock files back.
+    if is_descriptor "$path" && ! ours_now "$path"; then
+      backup_file "$path"
+    fi
+  elif ! ours_now "$path"; then
+    backup_file "$path"
+  fi
+done < <(managed_files)
 if [[ ! -e $state_dir/omarchy-static && ! -e $state_dir/omarchy-static.absent ]]; then
   if [[ -e /usr/share/plymouth/themes/omarchy-static || -L /usr/share/plymouth/themes/omarchy-static ]]; then
     cp -a --no-dereference /usr/share/plymouth/themes/omarchy-static "$state_dir/omarchy-static"
@@ -126,13 +117,9 @@ if [[ ! -e $state_dir/omarchy-static && ! -e $state_dir/omarchy-static.absent ]]
   fi
 fi
 
-# rustup ships /usr/bin/cargo as a shim and Arch's rustup package provides
-# `rust`, so the prerequisite check above can pass while root has no usable
-# cargo (rustup without a root default toolchain). Fall back to the invoking
-# user's toolchain, which is what Omarchy actually maintains.
 build_user_dir=
 if ! cargo --version >/dev/null 2>&1; then
-  if runuser -u "$invoking_user" -- cargo --version >/dev/null 2>&1; then
+  if user_cargo --version >/dev/null 2>&1; then
     build_user_dir=$(mktemp -d /tmp/omarchy-ttfx-build.XXXXXXXX)
     chown "$invoking_user:$user_group" "$build_user_dir"
     chmod 0755 "$root"
@@ -146,35 +133,28 @@ fi
 
 module="$state_dir/ttfx-plymouth-$arch.so"
 if [[ -n $build_user_dir ]]; then
-  runuser -u "$invoking_user" -- "$root/bin/omarchy-plymouth-ttfx-build" build \
+  runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" "$root/bin/omarchy-plymouth-ttfx-build" build \
     --output "$build_user_dir/ttfx-plymouth-$arch.so"
-  install -m 0755 "$build_user_dir/ttfx-plymouth-$arch.so" "$module"
+  install -o root -g root -m 0755 "$build_user_dir/ttfx-plymouth-$arch.so" "$module"
+  rm -rf -- "$build_user_dir"
 else
   "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
-fi
-
-bridge_binary=
-if [[ -d $audio_plugin ]]; then
-  bridge_target_dir="$state_dir/bridge-target-$arch"
-  if [[ -n $build_user_dir ]]; then
-    runuser -u "$invoking_user" -- env CARGO_TARGET_DIR="$build_user_dir/bridge-target" \
-      cargo build --release --locked --manifest-path "$root/bridge/Cargo.toml"
-    bridge_binary="$build_user_dir/bridge-target/release/ttfx-bg-rs"
-  else
-    CARGO_TARGET_DIR="$bridge_target_dir" cargo build --release --locked --manifest-path "$root/bridge/Cargo.toml"
-    bridge_binary="$bridge_target_dir/release/ttfx-bg-rs"
-  fi
-  [[ -x $bridge_binary ]] || { echo "Bridge build did not produce an executable." >&2; exit 1; }
 fi
 
 install -m 0755 "$root/bin/omarchy-plymouth-ttfx-install" "$helper"
 install -m 0644 "$root/default/plymouth/omarchy.plymouth" /usr/share/omarchy/default/plymouth/omarchy.plymouth
 install -m 0644 "$root/default/plymouth/ttfx-effects.txt" /usr/share/omarchy/default/plymouth/ttfx-effects.txt
+install -m 0644 "$root/default/plymouth/ttfx-effects.txt" /usr/share/plymouth/themes/omarchy/ttfx-effects.txt
 install -m 0644 "$root/default/mkinitcpio/zz-ttfx-kbd-order.conf" /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf
 install -d -m 0755 /etc/systemd/system/plymouth-quit.service.d
-install -m 0644 "$root/default/systemd/plymouth-quit.service.d/20-ttfx-deactivate.conf" \
-  /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf
+install -m 0644 "$root/default/systemd/system/plymouth-quit.service.d/10-omarchy-retain-splash.conf" \
+  /etc/systemd/system/plymouth-quit.service.d/10-omarchy-retain-splash.conf
+install -m 0644 "$root/default/systemd/system/omarchy-plymouth-reap.service" /etc/systemd/system/omarchy-plymouth-reap.service
+install -m 0644 "$root/default/systemd/system/omarchy-plymouth-reap.timer" /etc/systemd/system/omarchy-plymouth-reap.timer
+# The 2026-09 drop-in's deactivate now runs inside 10-omarchy-retain-splash.conf.
+rm -f -- /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf
 systemctl daemon-reload
+boot_changed=true
 "$helper" --module "$module"
 
 for directory in "${runtime_dirs[@]}"; do
@@ -184,93 +164,6 @@ for directory in "${runtime_dirs[@]}"; do
   done
 done
 
-install -d -m 0755 "${menu_extension%/*}"
-python3 - "$menu_extension" "$root/default/omarchy/ttfx-menu.json" <<'PY'
-import json, sys
-from pathlib import Path
-
-def jsonc_to_json(text):
-    out = []
-    i = 0
-    quoted = False
-    escaped = False
-    while i < len(text):
-        c = text[i]
-        if quoted:
-            out.append(c)
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == '"':
-                quoted = False
-            i += 1
-            continue
-        if c == '"':
-            quoted = True
-            out.append(c)
-            i += 1
-        elif text.startswith("//", i):
-            i = text.find("\n", i)
-            if i < 0:
-                break
-            out.append("\n")
-            i += 1
-        elif text.startswith("/*", i):
-            end = text.find("*/", i + 2)
-            if end < 0:
-                raise ValueError("unterminated JSONC block comment")
-            out.extend("\n" * text[i:end + 2].count("\n"))
-            i = end + 2
-        else:
-            out.append(c)
-            i += 1
-    text = "".join(out)
-    out = []
-    i = 0
-    quoted = escaped = False
-    while i < len(text):
-        c = text[i]
-        if quoted:
-            out.append(c)
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == '"':
-                quoted = False
-        elif c == '"':
-            quoted = True
-            out.append(c)
-        elif c == ',':
-            j = i + 1
-            while j < len(text) and text[j].isspace():
-                j += 1
-            if j < len(text) and text[j] in '}]':
-                i += 1
-                continue
-            out.append(c)
-        else:
-            out.append(c)
-        i += 1
-    return "".join(out)
-
-extension, additions = map(Path, sys.argv[1:])
-current = json.loads(jsonc_to_json(extension.read_text()) or "{}") if extension.exists() else {}
-current.update(json.loads(additions.read_text()))
-extension.write_text(json.dumps(current, indent=2, ensure_ascii=False) + "\n")
-PY
-chown "$invoking_user:$user_group" "$menu_extension"
-chmod 0644 "$menu_extension"
-
-if [[ -n $bridge_binary ]]; then
-  install -m 0755 "$bridge_binary" "$bridge_target"
-  chown "$invoking_user:$user_group" "$bridge_target"
-fi
-if [[ -n $build_user_dir ]]; then
-  rm -rf -- "$build_user_dir"
-fi
-
 current=$(PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin omarchy-plymouth-effect-set current)
 [[ $current != off ]] || { echo "Installed effect getter still resolves to Off." >&2; exit 1; }
 ! grep -F 'add_option "Off"' /usr/share/omarchy/bin/omarchy-plymouth-effect-switcher >/dev/null || {
@@ -278,12 +171,26 @@ current=$(PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin omarchy-plymouth-e
   exit 1
 }
 plymouth-set-default-theme | grep -Fx omarchy >/dev/null
-mapfile -d '' -t uki_images < <(find /boot/EFI/Linux -maxdepth 1 -type f -name '*.efi' -print0 2>/dev/null)
+uki_images=()
+if [[ -d /boot/EFI/Linux ]]; then
+  mapfile -d '' -t uki_images < <(find /boot/EFI/Linux -maxdepth 1 -type f -name '*.efi' -print0)
+fi
 for image in "${uki_images[@]}"; do
   "$helper" --verify-initramfs "$image"
 done
 
+record_installed_hashes
 : >"$state_dir/.installed"
 committed=true
 trap - ERR HUP INT TERM
-printf 'Installed TTFX Plymouth for %s (2x, effect=%s). Reboot to test it.\n' "$arch" "$current"
+
+# The menu extension belongs to the user and to the other tools that mark
+# blocks in it, so it is edited as that user and only inside our markers. A
+# menu that cannot be edited safely leaves the boot install in place.
+menu_status="added to Menu > Appearance > Bootloader"
+if ! runuser -u "$invoking_user" -- python3 "$root/scripts/menu-extension.py" add \
+  "$menu_extension" "$root/default/omarchy/ttfx-menu.jsonc"; then
+  menu_status="not added to the menu (see the message above); the boot animation is installed"
+fi
+
+printf 'Installed TTFX Plymouth for %s (2x, effect=%s), %s. Reboot to test it.\n' "$arch" "$current" "$menu_status"

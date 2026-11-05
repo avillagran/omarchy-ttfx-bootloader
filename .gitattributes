@@ -1,1 +1,4 @@
 bridge/boot-logo-v2.txt -whitespace
+
+# Patch context lines preserve upstream whitespace.
+native/plymouth-ttfx-engine/vendor/ttfx-plymouth.patch -whitespace

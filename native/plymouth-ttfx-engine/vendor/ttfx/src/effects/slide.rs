@@ -6,8 +6,7 @@ use clap::Args;
 
 use crate::cli::parse_color;
 use crate::effects::common::{
-    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_non_negative_int,
-    parse_positive_float,
+    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_non_negative_int, parse_positive_float,
 };
 use crate::engine::animation::{ExistingColorHandling, VisualParams};
 use crate::engine::character::CharId;
@@ -33,11 +32,7 @@ fn parse_slide_grouping(s: &str) -> Result<SlideGrouping, String> {
         "row" => SlideGrouping::Row,
         "column" => SlideGrouping::Column,
         "diagonal" => SlideGrouping::Diagonal,
-        _ => {
-            return Err(format!(
-                "invalid choice: '{s}' (choose from 'row', 'column', 'diagonal')"
-            ))
-        }
+        _ => return Err(format!("invalid choice: '{s}' (choose from 'row', 'column', 'diagonal')")),
     })
 }
 
@@ -107,49 +102,31 @@ impl Slide {
 }
 
 impl EffectHooks for Slide {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Slide {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord) = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
-                (
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                    ch.input_coord,
-                )
+                (ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone(), ch.input_coord)
             };
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
             self.character_final_color_map.insert(id, final_colors);
         }
@@ -159,22 +136,13 @@ impl Effect for Slide {
             SlideGrouping::Column => CharacterGroup::ColumnLeftToRight,
             SlideGrouping::Diagonal => CharacterGroup::DiagonalTopLeftToBottomRight,
         };
-        let mut groups = ctx
-            .terminal
-            .get_characters_grouped(CharacterFilter::default(), grouping);
+        let mut groups = ctx.terminal.get_characters_grouped(CharacterFilter::default(), grouping);
         for group in &groups {
             for &id in group {
                 let input_coord = ctx.terminal.arena[id.0 as usize].input_coord;
                 let motion = &mut ctx.terminal.arena[id.0 as usize].motion;
                 motion
-                    .new_path(
-                        self.config.movement_speed,
-                        Some(self.config.movement_easing),
-                        None,
-                        0,
-                        false,
-                        "input_path",
-                    )
+                    .new_path(self.config.movement_speed, Some(self.config.movement_easing), None, 0, false, "input_path")
                     .map_err(EngineError::Other)?;
                 motion
                     .paths
@@ -206,9 +174,7 @@ impl Effect for Slide {
                     for i in 0..groups[group_index].len() {
                         let id = groups[group_index][i];
                         let row = ctx.terminal.arena[id.0 as usize].input_coord.row;
-                        ctx.terminal.arena[id.0 as usize]
-                            .motion
-                            .set_coordinate(Coord::new(starting_column, row));
+                        ctx.terminal.arena[id.0 as usize].motion.set_coordinate(Coord::new(starting_column, row));
                     }
                 }
                 SlideGrouping::Column => {
@@ -228,17 +194,14 @@ impl Effect for Slide {
                     for i in 0..groups[group_index].len() {
                         let id = groups[group_index][i];
                         let column = ctx.terminal.arena[id.0 as usize].input_coord.column;
-                        ctx.terminal.arena[id.0 as usize]
-                            .motion
-                            .set_coordinate(Coord::new(column, starting_row));
+                        ctx.terminal.arena[id.0 as usize].motion.set_coordinate(Coord::new(column, starting_row));
                     }
                 }
                 SlideGrouping::Diagonal => {}
             }
             if self.config.grouping == SlideGrouping::Diagonal {
                 let last_coord = ctx.terminal.arena[group.last().unwrap().0 as usize].input_coord;
-                let distance_from_outside_bottom =
-                    last_coord.row - (ctx.terminal.canvas.bottom - 1);
+                let distance_from_outside_bottom = last_coord.row - (ctx.terminal.canvas.bottom - 1);
                 let mut starting_coord = Coord::new(
                     last_coord.column - distance_from_outside_bottom,
                     last_coord.row - distance_from_outside_bottom,
@@ -263,9 +226,7 @@ impl Effect for Slide {
                 }
                 for i in 0..groups[group_index].len() {
                     let id = groups[group_index][i];
-                    ctx.terminal.arena[id.0 as usize]
-                        .motion
-                        .set_coordinate(starting_coord);
+                    ctx.terminal.arena[id.0 as usize].motion.set_coordinate(starting_coord);
                 }
             }
             for &id in &group {
@@ -286,15 +247,11 @@ impl Effect for Slide {
                             .add_frame(
                                 &input_symbol,
                                 self.config.final_gradient_frames,
-                                VisualParams {
-                                    colors: Some(final_colors),
-                                    ..Default::default()
-                                },
+                                VisualParams { colors: Some(final_colors), ..Default::default() },
                             )
                             .map_err(EngineError::Other)?;
                     } else {
-                        let final_fg_color =
-                            final_colors.fg_color.clone().expect("gradient mapping fg");
+                        let final_fg_color = final_colors.fg_color.clone().expect("gradient mapping fg");
                         let char_gradient = Gradient::with_steps(
                             &[self.config.final_gradient_stops[0].clone(), final_fg_color],
                             10,
@@ -322,10 +279,7 @@ impl Effect for Slide {
     }
 
     fn next_frame(&mut self, ctx: &mut EngineCtx) -> Option<String> {
-        if !self.pending_groups.is_empty()
-            || !ctx.active_characters.is_empty()
-            || !self.active_groups.is_empty()
-        {
+        if !self.pending_groups.is_empty() || !ctx.active_characters.is_empty() || !self.active_groups.is_empty() {
             if self.current_gap == self.config.gap && !self.pending_groups.is_empty() {
                 self.active_groups.push(self.pending_groups.remove(0));
                 self.current_gap = 0;

@@ -52,7 +52,7 @@ int main(void)
         assert(strstr(text, "playback=hold-final\n") != NULL);
         /* A colliding temporary leaf (including symlink) cannot be followed.
          * Publication fails closed, removing stale final state, not its target. */
-        assert(symlinkat("/does-not-exist", dir, TTFX_HANDOFF_TEMP) == 0);
+        assert(symlinkat("missing-target", dir, TTFX_HANDOFF_TEMP) == 0);
         assert(!ttfx_handoff_publish(dir, &handoff));
         assert(faccessat(dir, TTFX_HANDOFF_NAME, F_OK, 0) != 0);
         unlinkat(dir, TTFX_HANDOFF_TEMP, 0);
@@ -66,7 +66,7 @@ int main(void)
         assert(!ttfx_handoff_publish(dir, &handoff));
         assert(faccessat(dir, TTFX_HANDOFF_TEMP, F_OK, 0) != 0);
         fail_rename = 0;
-        assert(symlinkat("/does-not-exist", dir, TTFX_HANDOFF_NAME) == 0);
+        assert(symlinkat("missing-target", dir, TTFX_HANDOFF_NAME) == 0);
         assert(ttfx_handoff_publish(dir, &handoff));
         assert(fstatat(dir, TTFX_HANDOFF_NAME, &st, AT_SYMLINK_NOFOLLOW) == 0);
         assert(S_ISREG(st.st_mode));
@@ -89,7 +89,7 @@ int main(void)
         assert(!ttfx_raw_publish(dir, pixels, 2, 1, stamp));
         assert(faccessat(dir, TTFX_RAW_TEMP, F_OK, 0) != 0);
         fail_rename = 0;
-        assert(symlinkat("/does-not-exist", dir, TTFX_RAW_NAME) == 0);
+        assert(symlinkat("missing-target", dir, TTFX_RAW_NAME) == 0);
         assert(ttfx_raw_publish(dir, pixels, 2, 1, stamp));
         assert(fstatat(dir, TTFX_RAW_NAME, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(st.st_mode));
         ttfx_handoff_clear(dir);

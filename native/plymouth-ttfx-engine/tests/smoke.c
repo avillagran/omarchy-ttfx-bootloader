@@ -62,14 +62,32 @@ int main(void) {
       break;
     }
   }
-  CHECK(looped == 1, "effect looped within safety bound");
-  CHECK(copy_snapshot(engine, &loop_frame, &other_count), "copy loop frame");
+  CHECK(looped == 1, "effect completed within safety bound");
+  CHECK(copy_snapshot(engine, &loop_frame, &other_count), "copy terminal frame");
   CHECK(other_count == count &&
-            memcmp(first, loop_frame, count * sizeof(*first)) == 0,
-        "first loop frame equals first frame");
+            memcmp(first, loop_frame, count * sizeof(*first)) != 0,
+        "completion retains terminal frame, not the next cycle's first frame");
 
-  CHECK(ttfx_engine_step(engine, &looped) == TTFX_STATUS_OK,
-        "move away from first frame before reset");
+  {
+    int has_lambda = 0;
+    for (size_t cell = 0; cell < count; ++cell) {
+      if (loop_frame[cell].codepoint == UINT32_C(0x03bb)) {
+        has_lambda = 1;
+      }
+    }
+    CHECK(has_lambda, "terminal snapshot preserves the Unicode lambda glyph");
+  }
+  CHECK(ttfx_engine_step(engine, &looped) == TTFX_STATUS_OK && looped == 1,
+        "completion remains idempotent before explicit reset");
+  {
+    const TtfxCell *cells = NULL;
+    uint32_t width = 0;
+    uint32_t height = 0;
+    CHECK(ttfx_engine_cells(engine, &cells, &other_count, &width, &height) ==
+              TTFX_STATUS_OK && other_count == count &&
+              memcmp(loop_frame, cells, count * sizeof(*cells)) == 0,
+          "repeated completion preserves the exact terminal snapshot");
+  }
   CHECK(ttfx_engine_reset(engine) == TTFX_STATUS_OK, "explicit reset");
   CHECK(copy_snapshot(engine, &reset_frame, &other_count), "copy reset frame");
   CHECK(other_count == count &&

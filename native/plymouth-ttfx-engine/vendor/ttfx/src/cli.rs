@@ -38,9 +38,7 @@ fn parse_canvas_dimension(s: &str) -> Result<i64, String> {
 /// argutils.ColorArg: <=3 chars -> xterm int 0-255, else hex.
 pub fn parse_color(s: &str) -> Result<Color, String> {
     if s.len() <= 3 {
-        let code: u8 = s
-            .parse()
-            .map_err(|_| format!("invalid color value: '{s}'"))?;
+        let code: u8 = s.parse().map_err(|_| format!("invalid color value: '{s}'"))?;
         Ok(Color::from_xterm(code))
     } else {
         Color::from_hex(s)
@@ -56,9 +54,7 @@ fn parse_existing_color_handling(s: &str) -> Result<ExistingColorHandling, Strin
         "always" => Ok(ExistingColorHandling::Always),
         "dynamic" => Ok(ExistingColorHandling::Dynamic),
         "ignore" => Ok(ExistingColorHandling::Ignore),
-        _ => Err(format!(
-            "invalid choice: '{s}' (choose from 'always', 'dynamic', 'ignore')"
-        )),
+        _ => Err(format!("invalid choice: '{s}' (choose from 'always', 'dynamic', 'ignore')")),
     }
 }
 

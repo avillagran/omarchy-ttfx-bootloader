@@ -4,8 +4,8 @@ set -euo pipefail
 
 source "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/base-test.sh"
 
-tmp_dir=$(mktemp -d)
-trap 'rm -rf "$tmp_dir"' EXIT
+tmp_dir=$(mktemp -d "${TMPDIR:-/var/tmp}/ttfx-test.XXXXXXXX")
+printf 'Test fixtures: %s\n' "$tmp_dir"
 fake_bin="$tmp_dir/bin"
 options_file="$tmp_dir/options"
 mkdir -p "$fake_bin"

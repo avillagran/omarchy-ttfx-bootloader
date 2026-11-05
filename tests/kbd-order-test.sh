@@ -40,18 +40,14 @@ source "$conf"
 [[ $(hooks_string) == "base udev encrypt filesystems keyboard" ]] ||
   fail "missing plymouth must still append keyboard: $(hooks_string)"
 
-grep -q '/etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf \\$' "$root/scripts/install.sh" ||
-  fail "install.sh does not back up the drop-in"
+grep -q '/etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf \\$' "$root/scripts/common.sh" ||
+  fail "the drop-in is not a managed file"
 grep -q 'install -m 0644 "$root/default/mkinitcpio/zz-ttfx-kbd-order.conf" /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf' "$root/scripts/install.sh" ||
   fail "install.sh does not install the drop-in"
-grep -q 'restore_file /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf' "$root/scripts/uninstall.sh" ||
-  fail "uninstall.sh does not restore the drop-in"
-grep -q '/etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf \\$' "$root/scripts/install.sh" ||
-  fail "install.sh does not back up the deactivate drop-in"
-grep -q 'restore_file /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf' "$root/scripts/uninstall.sh" ||
-  fail "uninstall.sh does not restore the deactivate drop-in"
-grep -q 'ExecStartPre=/usr/bin/timeout -k 1s 3s /usr/bin/plymouth deactivate' \
-  "$root/default/systemd/plymouth-quit.service.d/20-ttfx-deactivate.conf" ||
-  fail "deactivate drop-in lost its ExecStartPre"
+grep -q '/etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf \\$' "$root/scripts/common.sh" ||
+  fail "the 2026-09 deactivate drop-in is no longer restored on uninstall"
+grep -q 'ExecStartPre=-/usr/bin/timeout -k 1s 3s /usr/bin/plymouth deactivate' \
+  "$root/default/systemd/system/plymouth-quit.service.d/10-omarchy-retain-splash.conf" ||
+  fail "the quit drop-in no longer releases DRM master first"
 
 printf 'keyboard hook order: PASS\n'

@@ -55,7 +55,11 @@ pub fn run_effect(
                 ctx.terminal.recycle_output_string(frame);
                 break;
             }
-            ctx.terminal.print_frame(&mut out, &frame)?;
+            if tty_output && !ctx.terminal.config.ignore_terminal_dimensions {
+                ctx.terminal.print_differential_frame(&mut out, &frame)?;
+            } else {
+                ctx.terminal.print_frame(&mut out, &frame)?;
+            }
             ctx.terminal.recycle_output_string(frame);
         }
         Ok(())
@@ -85,7 +89,7 @@ pub fn run_effect(
 /// EIO is the pty slave outliving its master; EPIPE only surfaces here when
 /// SIGPIPE was ignored by whoever started us, since we restore its default.
 /// Both mean the same thing, and neither is a failure of this run.
-fn output_closed(e: &std::io::Error) -> bool {
+pub(crate) fn output_closed(e: &std::io::Error) -> bool {
     const EIO: i32 = 5;
     e.kind() == std::io::ErrorKind::BrokenPipe || e.raw_os_error() == Some(EIO)
 }
@@ -128,7 +132,7 @@ pub fn dump_effect(
     Ok(count)
 }
 
-fn io_err(e: std::io::Error) -> EngineError {
+pub(crate) fn io_err(e: std::io::Error) -> EngineError {
     EngineError::Other(format!("io error: {e}"))
 }
 

@@ -5,9 +5,7 @@ use std::collections::HashMap;
 use clap::Args;
 
 use crate::cli::parse_color;
-use crate::effects::common::{
-    parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float,
-};
+use crate::effects::common::{parse_easing, parse_gradient_direction, parse_gradient_steps, parse_positive_float};
 use crate::engine::animation::{ExistingColorHandling, SyncMetric, VisualParams};
 use crate::engine::character::CharId;
 use crate::engine::ctx::{EffectHooks, EngineCtx};
@@ -50,32 +48,19 @@ pub struct Expand {
 
 impl Expand {
     pub fn new(config: ExpandConfig) -> Self {
-        Expand {
-            config,
-            character_final_color_map: HashMap::new(),
-        }
+        Expand { config, character_final_color_map: HashMap::new() }
     }
 }
 
 impl EffectHooks for Expand {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        _callback: &EffectCallback,
-    ) {
-    }
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, _callback: &EffectCallback) {}
 }
 
 impl Effect for Expand {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let final_gradient = Gradient::new(
-            &self.config.final_gradient_stops,
-            &self.config.final_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let final_gradient =
+            Gradient::new(&self.config.final_gradient_stops, &self.config.final_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let final_gradient_mapping = ctx
             .final_gradient_mapping(&final_gradient, self.config.final_gradient_direction)
             .map_err(EngineError::Other)?;
@@ -83,32 +68,23 @@ impl Effect for Expand {
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord) = {
                 let ch = &ctx.terminal.arena[id.0 as usize];
-                (
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                    ch.input_coord,
-                )
+                (ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone(), ch.input_coord)
             };
             let final_colors = if dynamic {
                 ColorPair::new(input_fg, input_bg)
             } else {
-                ColorPair::new(
-                    Some(final_gradient_mapping.get(&input_coord).unwrap().clone()),
-                    None,
-                )
+                ColorPair::new(Some(final_gradient_mapping.get(&input_coord).unwrap().clone()), None)
             };
             self.character_final_color_map.insert(id, final_colors);
         }
         let characters = {
             let filter = CharacterFilter::default();
-            ctx.terminal
-                .get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
+            ctx.terminal.get_characters(&mut ctx.rng, filter, CharacterSort::TopToBottomLeftToRight)
         };
         for id in characters {
             let (input_fg, input_bg, input_coord, input_symbol, uses_pre) = {
@@ -127,14 +103,7 @@ impl Effect for Expand {
                 ch.motion.set_coordinate(center);
                 let path_id = ch
                     .motion
-                    .new_path(
-                        self.config.movement_speed,
-                        Some(self.config.expand_easing),
-                        None,
-                        0,
-                        false,
-                        "",
-                    )
+                    .new_path(self.config.movement_speed, Some(self.config.expand_easing), None, 0, false, "")
                     .map_err(EngineError::Other)?;
                 ch.motion
                     .paths
@@ -163,8 +132,7 @@ impl Effect for Expand {
             ctx.activate_path(self, id, &input_coord_path);
             let gradient_scn = {
                 let ch = &mut ctx.terminal.arena[id.0 as usize];
-                ch.animation
-                    .new_scene(false, Some(SyncMetric::Distance), None, "", uses_pre)
+                ch.animation.new_scene(false, Some(SyncMetric::Distance), None, "", uses_pre)
             };
             let symbols = vec![input_symbol.clone()];
             {
@@ -175,44 +143,28 @@ impl Effect for Expand {
                 if dynamic {
                     let fg_gradient = match &input_fg {
                         Some(c) => Some(
-                            Gradient::with_steps(
-                                &[final_gradient.spectrum[0].clone(), c.clone()],
-                                10,
-                                false,
-                            )
-                            .map_err(EngineError::Other)?,
+                            Gradient::with_steps(&[final_gradient.spectrum[0].clone(), c.clone()], 10, false)
+                                .map_err(EngineError::Other)?,
                         ),
                         None => None,
                     };
                     let bg_gradient = match &input_bg {
                         Some(c) => Some(
-                            Gradient::with_steps(
-                                &[final_gradient.spectrum[0].clone(), c.clone()],
-                                10,
-                                false,
-                            )
-                            .map_err(EngineError::Other)?,
+                            Gradient::with_steps(&[final_gradient.spectrum[0].clone(), c.clone()], 10, false)
+                                .map_err(EngineError::Other)?,
                         ),
                         None => None,
                     };
                     if fg_gradient.is_some() || bg_gradient.is_some() {
                         scene
-                            .apply_gradient_to_symbols(
-                                &symbols,
-                                1,
-                                fg_gradient.as_ref(),
-                                bg_gradient.as_ref(),
-                            )
+                            .apply_gradient_to_symbols(&symbols, 1, fg_gradient.as_ref(), bg_gradient.as_ref())
                             .map_err(EngineError::Other)?;
                     } else {
                         scene
                             .add_frame(
                                 &input_symbol,
                                 1,
-                                VisualParams {
-                                    colors: Some(ColorPair::default()),
-                                    ..Default::default()
-                                },
+                                VisualParams { colors: Some(ColorPair::default()), ..Default::default() },
                             )
                             .map_err(EngineError::Other)?;
                     }
@@ -221,12 +173,9 @@ impl Effect for Expand {
                         .fg_color
                         .clone()
                         .expect("gradient mapping fg");
-                    let gradient = Gradient::with_steps(
-                        &[final_gradient.spectrum[0].clone(), final_fg],
-                        10,
-                        false,
-                    )
-                    .map_err(EngineError::Other)?;
+                    let gradient =
+                        Gradient::with_steps(&[final_gradient.spectrum[0].clone(), final_fg], 10, false)
+                            .map_err(EngineError::Other)?;
                     scene
                         .apply_gradient_to_symbols(&symbols, 5, Some(&gradient), None)
                         .map_err(EngineError::Other)?;

@@ -96,11 +96,7 @@ struct GridLine {
 impl GridLine {
     /// GridLine.extend.
     fn extend(&mut self, ctx: &mut EngineCtx) {
-        let count = if self.direction == Direction::Horizontal {
-            3
-        } else {
-            1
-        };
+        let count = if self.direction == Direction::Horizontal { 3 } else { 1 };
         for _ in 0..count {
             if !self.collapsed_characters.is_empty() {
                 let next_char = self.collapsed_characters.remove(0);
@@ -112,11 +108,7 @@ impl GridLine {
 
     /// GridLine.collapse.
     fn collapse(&mut self, ctx: &mut EngineCtx) {
-        let count = if self.direction == Direction::Horizontal {
-            3
-        } else {
-            1
-        };
+        let count = if self.direction == Direction::Horizontal { 3 } else { 1 };
         if self.collapsed_characters.is_empty() {
             self.extended_characters.reverse();
         }
@@ -234,10 +226,7 @@ impl SynthGrid {
                 let ch = &mut ctx.terminal.arena[effect_char.0 as usize];
                 let uses_pre = ch.uses_input_preexisting_colors;
                 let scene_id = ch.animation.new_scene(false, None, None, "", uses_pre);
-                let fg = grid_gradient_mapping
-                    .get(&coord)
-                    .expect("grid gradient mapping missing coord")
-                    .clone();
+                let fg = grid_gradient_mapping.get(&coord).expect("grid gradient mapping missing coord").clone();
                 ch.animation
                     .scenes
                     .get_mut(&scene_id)
@@ -245,10 +234,7 @@ impl SynthGrid {
                     .add_frame(
                         &grid_symbol,
                         1,
-                        VisualParams {
-                            colors: Some(ColorPair::new(Some(fg), None)),
-                            ..Default::default()
-                        },
+                        VisualParams { colors: Some(ColorPair::new(Some(fg), None)), ..Default::default() },
                     )
                     .map_err(EngineError::Other)?;
                 scene_id
@@ -260,22 +246,12 @@ impl SynthGrid {
             characters.push(effect_char);
         }
         let collapsed_characters = characters.clone();
-        Ok(GridLine {
-            direction,
-            characters,
-            collapsed_characters,
-            extended_characters: Vec::new(),
-        })
+        Ok(GridLine { direction, characters, collapsed_characters, extended_characters: Vec::new() })
     }
 }
 
 impl EffectHooks for SynthGrid {
-    fn dispatch_callback(
-        &mut self,
-        _ctx: &mut EngineCtx,
-        _character: CharId,
-        callback: &EffectCallback,
-    ) {
+    fn dispatch_callback(&mut self, _ctx: &mut EngineCtx, _character: CharId, callback: &EffectCallback) {
         if callback.id == CB_UPDATE_GROUP_TRACKER {
             if let CallbackValue::Int(group_number) = callback.args[0] {
                 self.group_tracker[group_number as usize] -= 1;
@@ -286,13 +262,9 @@ impl EffectHooks for SynthGrid {
 
 impl Effect for SynthGrid {
     fn build(&mut self, ctx: &mut EngineCtx) -> Result<(), EngineError> {
-        let grid_gradient = Gradient::new(
-            &self.config.grid_gradient_stops,
-            &self.config.grid_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let grid_gradient =
+            Gradient::new(&self.config.grid_gradient_stops, &self.config.grid_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let grid_gradient_mapping = grid_gradient
             .build_coordinate_color_mapping(
                 1,
@@ -302,37 +274,22 @@ impl Effect for SynthGrid {
                 self.config.grid_gradient_direction,
             )
             .map_err(EngineError::Other)?;
-        let text_gradient = Gradient::new(
-            &self.config.text_gradient_stops,
-            &self.config.text_gradient_steps,
-            false,
-            false,
-        )
-        .map_err(EngineError::Other)?;
+        let text_gradient =
+            Gradient::new(&self.config.text_gradient_stops, &self.config.text_gradient_steps, false, false)
+                .map_err(EngineError::Other)?;
         let text_gradient_mapping = ctx
             .final_gradient_mapping(&text_gradient, self.config.text_gradient_direction)
             .map_err(EngineError::Other)?;
         let dynamic = ctx.terminal.config.existing_color_handling == ExistingColorHandling::Dynamic;
-        let characters = ctx.terminal.get_characters(
-            &mut ctx.rng,
-            CharacterFilter::default(),
-            CharacterSort::TopToBottomLeftToRight,
-        );
+        let characters =
+            ctx.terminal.get_characters(&mut ctx.rng, CharacterFilter::default(), CharacterSort::TopToBottomLeftToRight);
         for id in characters {
             let ch = &ctx.terminal.arena[id.0 as usize];
             let colors = if dynamic {
-                ColorPair::new(
-                    ch.animation.input_fg_color.clone(),
-                    ch.animation.input_bg_color.clone(),
-                )
+                ColorPair::new(ch.animation.input_fg_color.clone(), ch.animation.input_bg_color.clone())
             } else if ch.input_symbol != " " {
                 ColorPair::new(
-                    Some(
-                        text_gradient_mapping
-                            .get(&ch.input_coord)
-                            .expect("text gradient mapping")
-                            .clone(),
-                    ),
+                    Some(text_gradient_mapping.get(&ch.input_coord).expect("text gradient mapping").clone()),
                     None,
                 )
             } else {
@@ -442,8 +399,7 @@ impl Effect for SynthGrid {
                     }
                 }
                 if !characters_in_block.is_empty() {
-                    self.pending_groups
-                        .push((self.pending_groups.len() as i64, characters_in_block));
+                    self.pending_groups.push((self.pending_groups.len() as i64, characters_in_block));
                 }
                 prev_column_index = column_index;
             }
@@ -458,9 +414,8 @@ impl Effect for SynthGrid {
                     let ch = &ctx.terminal.arena[character.0 as usize];
                     (ch.input_symbol.clone(), ch.uses_input_preexisting_colors)
                 };
-                let dissolve_scn = ctx.terminal.arena[character.0 as usize]
-                    .animation
-                    .new_scene(false, None, None, "", uses_pre);
+                let dissolve_scn =
+                    ctx.terminal.arena[character.0 as usize].animation.new_scene(false, None, None, "", uses_pre);
                 let frame_count = ctx.rng.randint(15, 30);
                 for _ in 0..frame_count {
                     let symbol = ctx.rng.choice(&self.config.text_generation_symbols).clone();
@@ -473,18 +428,11 @@ impl Effect for SynthGrid {
                         .add_frame(
                             &symbol,
                             2,
-                            VisualParams {
-                                colors: Some(ColorPair::new(Some(fg), None)),
-                                ..Default::default()
-                            },
+                            VisualParams { colors: Some(ColorPair::new(Some(fg), None)), ..Default::default() },
                         )
                         .map_err(EngineError::Other)?;
                 }
-                let final_colors = self
-                    .character_final_color_map
-                    .get(&character)
-                    .cloned()
-                    .unwrap_or_default();
+                let final_colors = self.character_final_color_map.get(&character).cloned().unwrap_or_default();
                 ctx.terminal.arena[character.0 as usize]
                     .animation
                     .scenes
@@ -493,10 +441,7 @@ impl Effect for SynthGrid {
                     .add_frame(
                         &input_symbol,
                         1,
-                        VisualParams {
-                            colors: Some(final_colors),
-                            ..Default::default()
-                        },
+                        VisualParams { colors: Some(final_colors), ..Default::default() },
                     )
                     .map_err(EngineError::Other)?;
                 ctx.activate_scene(self, character, &dissolve_scn);
@@ -532,17 +477,10 @@ impl Effect for SynthGrid {
     }
 
     fn next_frame(&mut self, ctx: &mut EngineCtx) -> Option<String> {
-        if !self.pending_groups.is_empty()
-            || !ctx.active_characters.is_empty()
-            || self.phase != Phase::Complete
-        {
+        if !self.pending_groups.is_empty() || !ctx.active_characters.is_empty() || self.phase != Phase::Complete {
             match self.phase {
                 Phase::GridExpand => {
-                    if !self
-                        .grid_lines
-                        .iter()
-                        .all(|grid_line| grid_line.is_extended())
-                    {
+                    if !self.grid_lines.iter().all(|grid_line| grid_line.is_extended()) {
                         let mut grid_lines = std::mem::take(&mut self.grid_lines);
                         for grid_line in &mut grid_lines {
                             if !grid_line.is_extended() {
@@ -574,11 +512,7 @@ impl Effect for SynthGrid {
                     }
                 }
                 Phase::Collapse => {
-                    if !self
-                        .grid_lines
-                        .iter()
-                        .all(|grid_line| grid_line.is_collapsed())
-                    {
+                    if !self.grid_lines.iter().all(|grid_line| grid_line.is_collapsed()) {
                         let mut grid_lines = std::mem::take(&mut self.grid_lines);
                         for grid_line in &mut grid_lines {
                             if !grid_line.is_collapsed() {

@@ -4,8 +4,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/base-test.sh"
 set -euo pipefail
 
 installer="$ROOT/bin/omarchy-plymouth-ttfx-install"
-tmp=$(mktemp -d)
-trap 'rm -rf -- "$tmp"' EXIT
+tmp=$(mktemp -d "${TMPDIR:-/var/tmp}/ttfx-test.XXXXXXXX")
+printf 'Test fixtures: %s\n' "$tmp"
 root="$tmp/root"
 mkdir -p "$root/usr/lib/plymouth" "$root/usr/share/plymouth/themes/omarchy/animation" \
   "$root/usr/share/omarchy/default/plymouth" "$root/boot/EFI/Linux" "$tmp/bin"
@@ -50,8 +50,10 @@ count=0
 printf '%s' "$((count + 1))" >"$count_file"
 if [[ ${TEST_FAIL_FIRST_REBUILD:-0} == 1 && $count == 0 ]]; then exit 1; fi
 if [[ ${TEST_BOOT_FORMAT:-uki} == "classic" ]]; then
-  rm -f -- "${TEST_ROOT:?}"/boot/initramfs-*.img
   mkdir -p "${TEST_ROOT:?}/boot"
+  if [[ ! -f ${TEST_ROOT:?}/etc/mkinitcpio.d/linux-asahi.preset ]]; then
+    rm -f -- "${TEST_ROOT:?}"/boot/initramfs-*.img
+  fi
   printf 'initramfs:%s' "$(cat "${TEST_CURRENT_THEME:?}")" >"${TEST_ROOT:?}/boot/initramfs-linux-asahi.img"
   exit 0
 fi
@@ -136,7 +138,7 @@ exec /usr/bin/sed "$@"
 SH
 chmod +x "$tmp/bin/sed"
 
-canonical_libc=$(realpath -e /lib/x86_64-linux-gnu/libc.so.6)
+canonical_libc=$(realpath -e /usr/lib/libc.so.6)
 env_common=(
   PATH="$tmp/bin:/usr/bin:/bin"
   TEST_LDD_OUTPUT="$canonical_libc" TEST_EXTRA_INITRAMFS_PATH="${canonical_libc#/}"
@@ -168,9 +170,12 @@ fi
 grep -F 'unresolved module dependency: libmissing.so' "$tmp/err" >/dev/null || fail "unresolved dependency refusal names the library"
 pass "initramfs verifier rejects unresolved ldd dependencies"
 
-canonical_loader=$(realpath -e /lib64/ld-linux-x86-64.so.2)
+for loader in /lib64/ld-linux-x86-64.so.2 /lib/ld-linux-aarch64.so.1; do
+  [[ -e $loader ]] && break
+done
+canonical_loader=$(realpath -e "$loader")
 if ! env "${env_common[@]}" OMARCHY_PLYMOUTH_TEST_DEPENDENCIES= \
-  TEST_LDD_OUTPUT=/lib64/ld-linux-x86-64.so.2 \
+  TEST_LDD_OUTPUT=$loader \
   TEST_EXTRA_INITRAMFS_PATH=${canonical_loader#/} \
   "$installer" --verify-initramfs "$root/boot/EFI/Linux/omarchy_linux.efi" >"$tmp/out" 2>"$tmp/err"; then
   fail "initramfs verifier resolves loader symlinks before checking the image" "$(cat "$tmp/err")"
@@ -183,7 +188,9 @@ fi
 [[ $(<"$root/usr/lib/plymouth/ttfx-plymouth.so") == "old-module" ]] || fail "ABI refusal leaves last known-good module untouched"
 pass "runtime ABI gate fails before publication"
 
-rm -rf -- "$root/run"/omarchy-plymouth-install.*
+for retired in "$root/run"/omarchy-plymouth-install.*; do
+  [[ ! -e $retired ]] || mv -- "$retired" "$tmp/retired-${retired##*/}"
+done
 if env "${env_common[@]}" TEST_FAIL_DESCRIPTOR_BACKUP=1 "$installer" --module "$module_source" >"$tmp/out" 2>"$tmp/err"; then
   fail "descriptor backup failure reports failure"
 fi
@@ -283,7 +290,7 @@ fi
 [[ $(<"$root/boot/EFI/Linux/omarchy_linux.efi") == "old-uki" ]] || fail "failed rollback rebuild cannot replace the preserved known-good UKI"
 pass "failed rollback rebuild recopies the preserved UKI"
 
-rm -rf -- "$root/boot/EFI/Linux"
+mv -- "$root/boot/EFI/Linux" "$tmp/retired-uki"
 : >"$tmp/log"
 rm -f "$tmp/rebuild-count"
 if env "${env_common[@]}" TEST_UKI_MODE=multiple "$installer" --module "$module_source" >"$tmp/out" 2>"$tmp/err"; then
@@ -410,7 +417,7 @@ pass "lsinitcpio contract proves stock hook inclusion without a custom hook"
 
 classic_root="$tmp/classic-root"
 cp -a "$root" "$classic_root"
-rm -rf -- "$classic_root/boot/EFI/Linux"
+mv -- "$classic_root/boot/EFI/Linux" "$tmp/retired-classic-uki"
 printf old-classic >"$classic_root/boot/initramfs-linux-asahi.img"
 printf spinner >"$tmp/classic-current-theme"
 : >"$tmp/classic-log"
@@ -442,3 +449,43 @@ fi
   fail "classic rollback rebuilds the restored theme"
 [[ $(<"$tmp/classic-current-theme") == "spinner" ]] || fail "classic rollback restores previous theme"
 pass "classic initramfs rollback rebuilds the restored state"
+
+# A Mac keeps hand-saved images of earlier kernels beside the preset's image.
+# mkinitcpio -P never rebuilds them, so the install must neither verify nor
+# roll them back.
+mkdir -p "$classic_root/etc/mkinitcpio.d"
+cat >"$classic_root/etc/mkinitcpio.d/linux-asahi.preset" <<'PRESET'
+ALL_kver="/boot/vmlinuz-linux-asahi"
+PRESETS=('default')
+default_image="/boot/initramfs-linux-asahi.img"
+#fallback_image="/boot/initramfs-linux-asahi-fallback.img"
+PRESET
+# Like the real tool, the listing of an image built before the native module
+# lacks it.
+cat >"$tmp/bin/lsinitcpio-classic" <<'SH'
+#!/bin/bash
+[[ $(<"${!#}") != "kept-by-hand" ]] || exit 0
+exec "${TEST_LSINITCPIO:?}" "$@"
+SH
+chmod +x "$tmp/bin/lsinitcpio-classic"
+classic_env+=(OMARCHY_LSINITCPIO="$tmp/bin/lsinitcpio-classic" TEST_LSINITCPIO="$tmp/bin/lsinitcpio")
+printf old-classic >"$classic_root/boot/initramfs-linux-asahi.img"
+printf kept-by-hand >"$classic_root/boot/initramfs-asahi-previous.img"
+printf spinner >"$tmp/classic-current-theme"
+: >"$tmp/classic-log"
+rm -f "$tmp/classic-rebuild-count"
+env "${classic_env[@]}" "$installer" --module "$module_source" >"$tmp/out" 2>"$tmp/err" ||
+  fail "native install ignores a classic image no preset names" "$(cat "$tmp/err")"
+[[ $(<"$classic_root/boot/initramfs-linux-asahi.img") == "initramfs:omarchy" ]] ||
+  fail "the preset's classic image is rebuilt and verified"
+[[ $(<"$classic_root/boot/initramfs-asahi-previous.img") == "kept-by-hand" ]] ||
+  fail "a hand-saved classic image is left as it was"
+printf old-classic >"$classic_root/boot/initramfs-linux-asahi.img"
+printf spinner >"$tmp/classic-current-theme"
+rm -f "$tmp/classic-rebuild-count"
+if env "${classic_env[@]}" TEST_FAIL_FIRST_REBUILD=1 "$installer" --module "$module_source" >"$tmp/out" 2>"$tmp/err"; then
+  fail "a failed preset rebuild reports failure"
+fi
+[[ $(<"$classic_root/boot/initramfs-asahi-previous.img") == "kept-by-hand" ]] ||
+  fail "rollback leaves a hand-saved classic image as it was"
+pass "classic install verifies and rolls back only the images the presets name"

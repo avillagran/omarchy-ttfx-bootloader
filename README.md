@@ -1,6 +1,9 @@
 # Omarchy TTFX Bootloader
 
-Native TTFX animation for Omarchy's Plymouth boot and LUKS unlock screen, with a seamless handoff to `omarchy-audio-background` when that plugin is installed.
+Native TTFX animation for Omarchy's Plymouth boot and LUKS unlock screen, for Omarchy 4.5 on x86_64 and aarch64.
+
+This development branch contains the 0.5.1 integration. The public one-liners
+below retain their published archive pin until this branch is released.
 
 ## Install
 
@@ -8,17 +11,32 @@ Native TTFX animation for Omarchy's Plymouth boot and LUKS unlock screen, with a
 curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-ttfx-bootloader/main/install.sh | bash
 ```
 
-The installer downloads a temporary source archive, installs required Arch packages, builds the Plymouth 26 module and optional desktop bridge locally, activates the `omarchy` theme, rebuilds the UKI/initramfs, and verifies the resulting boot image.
+The installer downloads a pinned source archive and checks its sha256. It then:
 
-It also adds these entries to `Menu → Style → Bootloader`:
+- installs the Arch packages the build needs;
+- builds the Plymouth 26 module locally from vendored TTFX 0.5.1, with root's Rust toolchain or yours (`~/.cargo/bin`);
+- activates the `omarchy` theme;
+- rebuilds the UKI or initramfs and checks that the new image carries the module.
 
-- `Input Only` — default; plays once, accelerates after a valid password, and holds the final frame until the desktop handoff.
-- `Full Animated` — legacy continuous loop from boot through handoff.
-- `Effect` — selects and persists any supported TTFX effect. `Decrypt` is the initial/fallback effect; `Off` is not exposed.
+On a classic initramfs, it checks only the images the mkinitcpio presets name, so copies of earlier kernels' images kept beside them are left untouched.
 
-Animation runs at 2× while preserving the effect and playback selections across reinstall/update runs. Runtime helpers are installed consistently under `/usr/share/omarchy/bin`, `/usr/local/bin`, and `/usr/bin` because Omarchy Menu invokes its `/usr/share/omarchy/bin` copy directly.
+It also adds these entries under `Menu → Appearance → Bootloader`:
 
-Reboot after installation to validate the complete boot path.
+- `Input Only`: the default. Plays once, speeds up when the password is submitted, and holds the final frame until the desktop appears.
+- `Full Animated`: loops continuously from boot until the desktop appears.
+- `Effect`: picks any supported TTFX effect and keeps it. `Decrypt` is the initial and fallback effect; `Off` is not offered.
+
+The animation runs at 2×. Your effect and playback choices survive reinstalls and updates.
+
+The menu entries go into your `~/.config/omarchy/extensions/omarchy-menu.jsonc` as a block between `// omarchy-ttfx-bootloader:start` and `:end` markers. The installer edits the file as your user, only inside those markers, and changes nothing if the result would not parse.
+
+The runtime helpers are installed in `/usr/share/omarchy/bin`, `/usr/local/bin` and `/usr/bin`.
+
+At the end of boot, Plymouth gives up the display before it quits, and leaves its last frame on screen until the desktop draws over it. The renderer of the `omarchy-audio-background` plugin is its own and is not touched.
+
+An `omarchy-settings` update puts the stock Plymouth theme back. Run the installer again afterwards.
+
+Reboot after installation to check the full boot path.
 
 ## Uninstall
 
@@ -26,17 +44,34 @@ Reboot after installation to validate the complete boot path.
 curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-ttfx-bootloader/main/uninstall.sh | bash
 ```
 
-Uninstall restores the files, menu extension, previous Plymouth theme, and boot image state captured by the first standalone installation.
+Uninstall restores the original of each file only if the file is still exactly what the install wrote. A file that changed since then stays as it is and is listed at the end, for example one that an `omarchy-settings` update replaced.
+
+It also:
+
+- removes the menu block;
+- restores the previous Plymouth theme;
+- rebuilds the boot images.
+
+An install made by the 2026-09 installer must be upgraded by running the current installer once before it can be uninstalled.
 
 ## Local verification
 
 ```bash
-bash tests/installer-static.sh
-bash tests/kbd-order-test.sh
-bash tests/shell.d/plymouth-effect-switcher-test.sh
-bash tests/shell.d/plymouth-native-install-test.sh
-bash tests/shell.d/plymouth-native-package-test.sh
-native/plymouth-ttfx-plugin/tests/run.sh
-(cd native/plymouth-ttfx-engine && cargo test --locked)
-(cd bridge && cargo test --locked)
+bash tests/verify.sh
 ```
+
+Run this on the target architecture with Rust (including Clippy), GCC, Python 3,
+Node.js, strace, and the matching Plymouth development libraries installed.
+The checks include an isolated offline build, C ABI isolation tracing, sanitized
+plugin tests, and a real module build staged into a temporary directory. They
+run without root and leave fixtures under `${TMPDIR:-/var/tmp}` for inspection.
+They do not activate the staged theme or rebuild the machine's boot images.
+
+TTFX 0.4.0 introduced an assembly engine; upstream removed it in 0.5.0. This
+integration pins 0.5.1. Plymouth uses the original engine's structured cell API;
+upstream's optimized `fx` terminal runner is not used by the boot animation.
+See [the upstream releases](https://github.com/omacom/ttfx/releases) and
+[the integration details](native/plymouth-ttfx-engine/UPSTREAM.md).
+
+
+`native/` and the runtime helpers in `bin/` come from the Omarchy branch `feature/ttfx-plymouth-quattro`. `native/plymouth-ttfx-engine/UPSTREAM.md` records the TTFX import and its downstream patch.
