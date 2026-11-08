@@ -76,3 +76,17 @@ grep -F '(( BASHPID == $$ )) || exit "$status"' "$root/scripts/install.sh" >/dev
 grep -F "find /boot/EFI/Linux -maxdepth 1 -type f -name '*.efi' -print0 2>/dev/null" "$root/scripts/install.sh" >/dev/null &&
   fail "a missing UKI directory fails inside the installer"
 pass "only the installer itself rolls back"
+
+# The unprivileged build copies only build_inputs; that copy must pass the
+# build's own embedded-logo freshness check.
+inputs_line=$(grep -E '^build_inputs=\(' "$root/scripts/install.sh") || fail "installer declares no build inputs"
+eval "$inputs_line"
+build_copy=$(mktemp -d "${TMPDIR:-/var/tmp}/ttfx-build-inputs.XXXXXXXX")
+for input in "${build_inputs[@]}"; do
+  cp -a -- "$root/$input" "$build_copy/"
+done
+python3 "$build_copy/native/plymouth-ttfx-plugin/generate-embedded-logo.py" --check ||
+  fail "user build copy misses inputs of the embedded-logo check (retained at $build_copy)"
+grep -F 'trap on_failure ERR HUP INT TERM EXIT' "$root/scripts/install.sh" >/dev/null ||
+  fail "explicit exits after boot changes skip rollback"
+pass "user build copy is complete and every exit before commit rolls back"

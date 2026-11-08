@@ -1,7 +1,7 @@
 [Plymouth Theme]
 Name=Omarchy
 Description=Omarchy splash screen.
-ModuleName=ttfx-plymouth
+ModuleName=script
 
 [ttfx]
 ImageDir=/usr/share/plymouth/themes/omarchy

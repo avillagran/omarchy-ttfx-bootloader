@@ -48,3 +48,7 @@ bash tests/self-contained.sh
 The embedded smoke test links the real optimized static library and uses strace to reject tty discovery, subprocesses, sleeping, signal setup, and ANSI output. The self-contained test copies only source, builds with an empty CARGO_HOME and target directory (`--locked --offline --profile plymouth`), and links and runs the C smoke against that library.
 
 These are host-side checks, not boot acceptance.
+
+## Quattro integration
+
+The source integration is ported onto `omacom/omarchy` `quattro` commit `6194f4606c585da8b839b87df9120b7d796afedf`. The package default remains the stock script renderer until a trusted native module is activated transactionally; branding refreshes preserve valid installed native playback and fall back to script if the module is absent. The current upstream late-display fallback script is retained. See `docs/plymouth-ttfx.md` for provisioning, optional desktop handoff, and validation boundaries.

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # omarchy:summary=Install the ABI-matched native TTFX Plymouth module
-# omarchy:args=<--module FILE [--force-enable]|--verify-initramfs IMAGE>
+# omarchy:args=<--module FILE|--verify-initramfs IMAGE>
 # omarchy:hidden=true
 # omarchy:requires-sudo=true
 
@@ -202,7 +202,7 @@ validate_native_template() {
     [[ $component == "$anchor" ]] && break
     component=$(dirname -- "$component")
   done
-  for required in '[ttfx]' 'Enabled=true' 'Mode=fixed' 'Effect=decrypt' 'Seed=22321466108495961'; do
+  for required in '[ttfx]' 'Enabled=true' 'Mode=fixed' 'Effect=decrypt' 'Seed=22321466108495961' 'PlaybackMode=submit-to-finish'; do
     grep -Fx -- "$required" "$canonical" >/dev/null || {
       printf 'native descriptor template is incomplete: %s\n' "$required" >&2
       return 1
@@ -274,17 +274,8 @@ merge_valid_descriptor_state() {
 }
 
 module_dependencies() {
-  local module=$1 output unresolved dependency canonical probe
-  # ldd refuses non-executable .so files on some targets. Inspect a temporary
-  # executable copy so the published Plymouth module may remain mode 0644.
-  probe=$(mktemp --tmpdir="${module%/*}" '.ttfx-ldd.XXXXXXXX')
-  install -m 0755 -- "$module" "$probe"
-  if ! output=$(ldd "$probe"); then
-    rm -f -- "$probe"
-    echo "omarchy-plymouth-ttfx-install: unable to inspect module dependencies" >&2
-    return 1
-  fi
-  rm -f -- "$probe"
+  local module=$1 output unresolved dependency canonical
+  output=$(ldd "$module") || { echo "omarchy-plymouth-ttfx-install: unable to inspect module dependencies" >&2; return 1; }
   unresolved=$(awk '$2 == "=>" && $3 == "not" && $4 == "found" { print $1 }' <<<"$output")
   if [[ -n $unresolved ]]; then
     while IFS= read -r dependency; do
@@ -347,8 +338,69 @@ verify_initramfs() {
   done
 }
 
+# A higher-level root installer may already own this same lock across its
+# snapshot and publication. Reuse only a descriptor for the trusted lock inode
+# on which a nonblocking exclusive flock succeeds. A separately opened file
+# description cannot pass while another process owns the lock.
+acquire_plymouth_lock() {
+  local directory="$system_root/run/lock" lock_path component owner mode expected_owner inherited
+  local path_identity descriptor_identity
+  lock_path=$directory/omarchy-plymouth.lock
+  expected_owner=0
+  if $test_mode; then expected_owner=$EUID; fi
+
+  # Check the existing anchor before creating descendants, and never chmod or
+  # traverse an existing symlink while preparing the lock directory.
+  for component in "${system_root:-/}" "$system_root/run" "$directory"; do
+    if [[ ! -e $component && ! -L $component ]]; then
+      mkdir -m 0755 -- "$component"
+    fi
+    [[ -d $component && ! -L $component && $(realpath -e -- "$component") == "$component" ]] || {
+      echo "Plymouth lock ancestry is not canonical: $component" >&2
+      return 1
+    }
+    owner=$(stat -c %u -- "$component")
+    mode=$(stat -c %a -- "$component")
+    (( owner == expected_owner && (8#$mode & 0022) == 0 )) || {
+      echo "Plymouth lock ancestry is not trusted: $component" >&2
+      return 1
+    }
+  done
+
+  if [[ -e $lock_path || -L $lock_path ]]; then
+    [[ -f $lock_path && ! -L $lock_path ]] || {
+      echo "Plymouth lock must be a regular file: $lock_path" >&2
+      return 1
+    }
+    owner=$(stat -c %u -- "$lock_path")
+    mode=$(stat -c %a -- "$lock_path")
+    (( owner == expected_owner && (8#$mode & 0022) == 0 )) || {
+      echo "Plymouth lock file is not trusted: $lock_path" >&2
+      return 1
+    }
+  fi
+
+  inherited=${OMARCHY_PLYMOUTH_LOCK_FD:-}
+  if [[ $inherited =~ ^[1-9][0-9]{0,5}$ ]] && (( inherited >= 3 )) && [[ -f $lock_path ]]; then
+    path_identity=$(stat -Lc '%d:%i' -- "$lock_path")
+    descriptor_identity=$(stat -Lc '%d:%i' -- "/proc/self/fd/$inherited" 2>/dev/null) || descriptor_identity=
+    if [[ $descriptor_identity == "$path_identity" ]] && flock -xn "$inherited"; then
+      return 0
+    fi
+  fi
+
+  # A missing, unrelated, or separately opened descriptor never bypasses the
+  # shared lock. Open a fresh descriptor and take the ordinary exclusive lock.
+  local saved_umask
+  saved_umask=$(umask)
+  umask 077
+  exec {plymouth_lock_fd}>"$lock_path"
+  umask "$saved_umask"
+  flock -x "$plymouth_lock_fd"
+}
+
 install_module() {
-  local source=$1 force_enable=${2:-false} canonical_source canonical_template image source_type source_owner source_mode expected_owner
+  local source=$1 canonical_source canonical_template image source_type source_owner source_mode expected_owner
   local -a boot_images
   work=
   backup=
@@ -368,9 +420,11 @@ install_module() {
   committed=false
   rollback_failed=0
 
-  # Plymouth 26 cannot insert [Daemon] into a zero-byte configuration because
-  # its sed command has no input line to address. Make theme selection real
-  # before switching to recovery/native themes.
+  acquire_plymouth_lock
+
+  # Plymouth 26's setter cannot insert [Daemon] into a zero-byte file: sed's
+  # line-addressed insertion never runs when there are no input lines. Ensure
+  # the configuration is parseable before selecting recovery/native themes.
   install -d -m 0755 "$system_root/etc/plymouth"
   if [[ ! -s $system_root/etc/plymouth/plymouthd.conf ]]; then
     printf '[Daemon]\n' >"$system_root/etc/plymouth/plymouthd.conf"
@@ -381,9 +435,6 @@ install_module() {
   [[ -f $theme_dir/omarchy.plymouth && -f $theme_dir/omarchy.script ]] || { echo "installed Omarchy theme is incomplete" >&2; return 1; }
   canonical_template=$(validate_native_template)
 
-  install -d -m 0755 "$system_root/run/lock"
-  exec 9>"$system_root/run/lock/omarchy-plymouth.lock"
-  flock -x 9
   work=$(mktemp -d "$system_root/run/omarchy-plymouth-install.XXXXXXXX")
   backup="$work/backup"
 
@@ -523,9 +574,7 @@ install_module() {
 
   descriptor_stage=$(mktemp --tmpdir="$theme_dir" '.omarchy.plymouth.XXXXXXXX')
   cp "$canonical_template" "$descriptor_stage"
-  if ! $force_enable; then
-    merge_valid_descriptor_state "$theme_dir/omarchy.plymouth" "$descriptor_stage"
-  fi
+  merge_valid_descriptor_state "$theme_dir/omarchy.plymouth" "$descriptor_stage"
   sed -i 's/^ModuleName=.*/ModuleName=ttfx-plymouth/' "$descriptor_stage"
   chown 0:0 "$descriptor_stage" 2>/dev/null || $test_mode
   chmod 0644 "$descriptor_stage"
@@ -569,10 +618,8 @@ install_module() {
 
 case ${1:-} in
 --module)
-  [[ -n ${2:-} && ( $# == 2 || ( $# == 3 && ${3:-} == "--force-enable" ) ) ]] || exit 2
-  force_enable=false
-  [[ ${3:-} != "--force-enable" ]] || force_enable=true
-  install_module "$2" "$force_enable"
+  (( $# == 2 )) || exit 2
+  install_module "$2"
   ;;
 --verify-initramfs)
   (( $# == 2 )) || exit 2

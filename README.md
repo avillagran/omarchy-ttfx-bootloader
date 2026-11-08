@@ -2,7 +2,8 @@
 
 Native TTFX animation for Omarchy's Plymouth boot and LUKS unlock screen, for Omarchy 4.5 on x86_64 and aarch64.
 
-This development branch contains the 0.5.1 integration. The public one-liners
+This development branch ports the complete boot integration to Omarchy quattro
+(base `6194f4606`) with the TTFX 0.5.1 engine. The public one-liners
 below retain their published archive pin until this branch is released.
 
 ## Install
@@ -18,7 +19,7 @@ The installer downloads a pinned source archive and checks its sha256. It then:
 - activates the `omarchy` theme;
 - rebuilds the UKI or initramfs and checks that the new image carries the module.
 
-On a classic initramfs, it checks only the images the mkinitcpio presets name, so copies of earlier kernels' images kept beside them are left untouched.
+The native installer verifies only the boot images it rebuilds: owned Omarchy UKIs or the images named by mkinitcpio presets. Other distributions and hand-saved images are left untouched.
 
 It also adds these entries under `Menu → Appearance → Bootloader`:
 
@@ -26,7 +27,7 @@ It also adds these entries under `Menu → Appearance → Bootloader`:
 - `Full Animated`: loops continuously from boot until the desktop appears.
 - `Effect`: picks any supported TTFX effect and keeps it. `Decrypt` is the initial and fallback effect; `Off` is not offered.
 
-The animation runs at 2×. Your effect and playback choices survive reinstalls and updates.
+The animation runs at 2×. Your effect and playback choices survive reinstalls and theme branding changes. The installer includes the quattro branding helper and backs up the command it replaces.
 
 The menu entries go into your `~/.config/omarchy/extensions/omarchy-menu.jsonc` as a block between `// omarchy-ttfx-bootloader:start` and `:end` markers. The installer edits the file as your user, only inside those markers, and changes nothing if the result would not parse.
 
@@ -34,7 +35,7 @@ The runtime helpers are installed in `/usr/share/omarchy/bin`, `/usr/local/bin` 
 
 At the end of boot, Plymouth gives up the display before it quits, and leaves its last frame on screen until the desktop draws over it. The renderer of the `omarchy-audio-background` plugin is its own and is not touched.
 
-An `omarchy-settings` update puts the stock Plymouth theme back. Run the installer again afterwards.
+An `omarchy-settings` update may put the stock Plymouth theme back. Run the installer again afterwards. A failed install or reinstall restores its pre-attempt snapshot; publication is serialized with effect and branding commands through the shared Plymouth lock. Pre-attempt snapshots are retained under `/var/tmp` for inspection.
 
 Reboot after installation to check the full boot path.
 

@@ -7,6 +7,7 @@ export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/usr/sbin
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=scripts/common.sh
 source "$root/scripts/common.sh"
+acquire_installer_lock
 arch=$(uname -m)
 new_install=false
 boot_changed=false
@@ -28,20 +29,8 @@ user_group=$(id -gn "$invoking_user")
 menu_extension="$user_home/.config/omarchy/extensions/omarchy-menu.jsonc"
 
 restore_initial_state() {
-  local path
-  if $new_install && ! $committed; then
-    while IFS= read -r path; do restore_file "$path"; done < <(managed_files)
-    if [[ -f $state_dir/omarchy-static.absent ]]; then
-      rm -rf -- /usr/share/plymouth/themes/omarchy-static
-    elif [[ -d $state_dir/omarchy-static ]]; then
-      rm -rf -- /usr/share/plymouth/themes/omarchy-static
-      cp -a --no-dereference "$state_dir/omarchy-static" /usr/share/plymouth/themes/omarchy-static
-    fi
-    systemctl daemon-reload || true
-    if $boot_changed; then
-      plymouth-set-default-theme "$(<"$state_dir/previous-theme")" || true
-      rebuild_boot_images || true
-    fi
+  if ! $committed; then
+    rollback_install_transaction
   fi
 }
 
@@ -50,16 +39,19 @@ on_failure() {
   # errtrace hands this trap to every subshell, process substitutions
   # included; only the installer itself may roll back.
   (( BASHPID == $$ )) || exit "$status"
-  trap - ERR HUP INT TERM
-  restore_initial_state || true
+  trap - ERR HUP INT TERM EXIT
+  if ! restore_initial_state; then
+    printf 'TTFX rollback was incomplete; inspect %s before rebooting.\n' "$transaction_dir" >&2
+  fi
   exit "$status"
 }
-trap on_failure ERR HUP INT TERM
+# EXIT also covers explicit `exit 1` checks after the boot state changed.
+trap on_failure ERR HUP INT TERM EXIT
 
 # The module builds with root's cargo, else with the invoking user's: rustup
 # lives in ~/.cargo/bin, and Arch's /usr/bin/cargo can be a rustup shim with
 # no default toolchain for root. Install Arch's rust only when neither works.
-user_path="$user_home/.cargo/bin:$PATH"
+user_path="$user_home/.cargo/bin:$user_home/.local/share/mise/shims:$PATH"
 user_cargo() {
   runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" cargo "$@"
 }
@@ -77,6 +69,39 @@ if (( ${#missing[@]} )); then
   fi
 fi
 install -d -m 0700 "$state_dir"
+
+build_inputs=(bin native default logo.txt)
+build_user_dir=
+if ! cargo --version >/dev/null 2>&1; then
+  if user_cargo --version >/dev/null 2>&1; then
+    build_user_dir=$(mktemp -d "${TMPDIR:-/var/tmp}/omarchy-ttfx-build.XXXXXXXX")
+    chown "$invoking_user:$user_group" "$build_user_dir"
+    install -d -m 0755 "$build_user_dir/source"
+    # Every input the build reads, including logo.txt for the embedded-logo check.
+    for input in "${build_inputs[@]}"; do
+      cp -a -- "$root/$input" "$build_user_dir/source/"
+    done
+    chown -hR "$invoking_user:$user_group" "$build_user_dir/source"
+  else
+    printf 'No working cargo for root or %s. Install Rust (pacman -S rust) and retry.\n' "$invoking_user" >&2
+    exit 1
+  fi
+fi
+
+module="$state_dir/ttfx-plymouth-$arch.so"
+if [[ -n $build_user_dir ]]; then
+  runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" "$build_user_dir/source/bin/omarchy-plymouth-ttfx-build" build \
+    --output "$build_user_dir/ttfx-plymouth-$arch.so"
+  install -o root -g root -m 0755 "$build_user_dir/ttfx-plymouth-$arch.so" "$module"
+  printf 'Build source retained at %s\n' "$build_user_dir"
+else
+  "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
+fi
+
+# Build first; hold the common Plymouth lock only while snapshotting and
+# publishing, so rollback cannot overwrite a concurrent successful selection.
+acquire_plymouth_lock
+begin_install_transaction
 
 # A failed first attempt leaves its backups and previous theme behind; they
 # still describe the system before this installer touched it.
@@ -117,32 +142,10 @@ if [[ ! -e $state_dir/omarchy-static && ! -e $state_dir/omarchy-static.absent ]]
   fi
 fi
 
-build_user_dir=
-if ! cargo --version >/dev/null 2>&1; then
-  if user_cargo --version >/dev/null 2>&1; then
-    build_user_dir=$(mktemp -d /tmp/omarchy-ttfx-build.XXXXXXXX)
-    chown "$invoking_user:$user_group" "$build_user_dir"
-    chmod 0755 "$root"
-    find "$root" -type d -exec chmod a+rx {} +
-    find "$root" -type f -exec chmod a+r {} +
-  else
-    printf 'No working cargo for root or %s. Install Rust (pacman -S rust) and retry.\n' "$invoking_user" >&2
-    exit 1
-  fi
-fi
-
-module="$state_dir/ttfx-plymouth-$arch.so"
-if [[ -n $build_user_dir ]]; then
-  runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" "$root/bin/omarchy-plymouth-ttfx-build" build \
-    --output "$build_user_dir/ttfx-plymouth-$arch.so"
-  install -o root -g root -m 0755 "$build_user_dir/ttfx-plymouth-$arch.so" "$module"
-  rm -rf -- "$build_user_dir"
-else
-  "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
-fi
-
 install -m 0755 "$root/bin/omarchy-plymouth-ttfx-install" "$helper"
 install -m 0644 "$root/default/plymouth/omarchy.plymouth" /usr/share/omarchy/default/plymouth/omarchy.plymouth
+install -m 0644 "$root/default/plymouth/omarchy.script" /usr/share/omarchy/default/plymouth/omarchy.script
+install -m 0644 "$root/default/plymouth/omarchy.script" /usr/share/plymouth/themes/omarchy/omarchy.script
 install -m 0644 "$root/default/plymouth/ttfx-effects.txt" /usr/share/omarchy/default/plymouth/ttfx-effects.txt
 install -m 0644 "$root/default/plymouth/ttfx-effects.txt" /usr/share/plymouth/themes/omarchy/ttfx-effects.txt
 install -m 0644 "$root/default/mkinitcpio/zz-ttfx-kbd-order.conf" /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf
@@ -171,18 +174,13 @@ current=$(PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin omarchy-plymouth-e
   exit 1
 }
 plymouth-set-default-theme | grep -Fx omarchy >/dev/null
-uki_images=()
-if [[ -d /boot/EFI/Linux ]]; then
-  mapfile -d '' -t uki_images < <(find /boot/EFI/Linux -maxdepth 1 -type f -name '*.efi' -print0)
-fi
-for image in "${uki_images[@]}"; do
-  "$helper" --verify-initramfs "$image"
-done
+# The native helper verifies exactly the boot images it rebuilt. Other
+# distributions and hand-kept UKIs must remain outside this transaction.
 
 record_installed_hashes
 : >"$state_dir/.installed"
 committed=true
-trap - ERR HUP INT TERM
+trap - ERR HUP INT TERM EXIT
 
 # The menu extension belongs to the user and to the other tools that mark
 # blocks in it, so it is edited as that user and only inside our markers. A
@@ -193,4 +191,5 @@ if ! runuser -u "$invoking_user" -- python3 "$root/scripts/menu-extension.py" ad
   menu_status="not added to the menu (see the message above); the boot animation is installed"
 fi
 
+printf 'Pre-attempt backup retained at %s\n' "$transaction_dir"
 printf 'Installed TTFX Plymouth for %s (2x, effect=%s), %s. Reboot to test it.\n' "$arch" "$current" "$menu_status"

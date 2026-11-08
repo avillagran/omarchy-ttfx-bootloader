@@ -33,7 +33,7 @@ for effect in "${effects[@]}"; do
   [[ $effect == "$current" ]] || add_option "${effect^}" "$effect"
 done
 
-selection=$(printf '%s\n' "${options[@]}" | omarchy-menu-select "Boot logo effect") || exit 1
+selection=$(printf '%s\n' "${options[@]}" | omarchy-menu-select "Bootloader effect…") || exit 1
 key=${option_keys[$selection]:-}
 [[ -n ${key:-} ]] || exit 1
 printf '%s\n' "$key"

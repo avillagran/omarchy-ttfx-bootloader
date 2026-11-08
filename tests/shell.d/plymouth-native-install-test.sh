@@ -489,3 +489,42 @@ fi
 [[ $(<"$classic_root/boot/initramfs-asahi-previous.img") == "kept-by-hand" ]] ||
   fail "rollback leaves a hand-saved classic image as it was"
 pass "classic install verifies and rolls back only the images the presets name"
+
+# The outer installer owns the same shared lock across snapshot and commit.
+# A child must inherit the exact open file description, not just any descriptor
+# or an independent open of that same inode.
+mkdir -p "$root/run/lock"
+shared_lock="$root/run/lock/omarchy-plymouth.lock"
+cat >"$tmp/lock-probe" <<'SH'
+#!/bin/bash
+set -euo pipefail
+source <(/usr/bin/sed "/^case /,\$d" "$INSTALLER")
+acquire_plymouth_lock
+printf 'shared lock acquired\n'
+SH
+chmod +x "$tmp/lock-probe"
+exec {held_lock}>"$shared_lock"
+flock -x "$held_lock"
+
+status=0
+timeout 1 env "${env_common[@]}" INSTALLER="$installer" "$tmp/lock-probe" >"$tmp/lock.out" 2>"$tmp/lock.err" || status=$?
+[[ $status == 124 && ! -s $tmp/lock.out ]] || fail "ordinary child waits for the shared Plymouth lock" "$(cat "$tmp/lock.err")"
+
+if ! timeout 5 env "${env_common[@]}" INSTALLER="$installer" OMARCHY_PLYMOUTH_LOCK_FD="$held_lock" "$tmp/lock-probe" >"$tmp/lock.out" 2>"$tmp/lock.err"; then
+  fail "a valid inherited shared lock completes without deadlock" "$(cat "$tmp/lock.err")"
+fi
+grep -Fxq 'shared lock acquired' "$tmp/lock.out" || fail "inherited descriptor did not acquire the real lock"
+
+exec {unrelated_lock}>"$tmp/unrelated.lock"
+status=0
+timeout 1 env "${env_common[@]}" INSTALLER="$installer" OMARCHY_PLYMOUTH_LOCK_FD="$unrelated_lock" "$tmp/lock-probe" >"$tmp/lock.out" 2>"$tmp/lock.err" || status=$?
+[[ $status == 124 && ! -s $tmp/lock.out ]] || fail "an unrelated descriptor cannot bypass the shared lock" "$(cat "$tmp/lock.err")"
+exec {unrelated_lock}>&-
+
+exec {independent_lock}>"$shared_lock"
+status=0
+timeout 1 env "${env_common[@]}" INSTALLER="$installer" OMARCHY_PLYMOUTH_LOCK_FD="$independent_lock" "$tmp/lock-probe" >"$tmp/lock.out" 2>"$tmp/lock.err" || status=$?
+[[ $status == 124 && ! -s $tmp/lock.out ]] || fail "an independent open of the same inode cannot bypass its owner" "$(cat "$tmp/lock.err")"
+exec {independent_lock}>&-
+exec {held_lock}>&-
+pass "shared Plymouth lock permits only a validated inherited open file description"

@@ -7,6 +7,8 @@ export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/usr/sbin
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 # shellcheck source=scripts/common.sh
 source "$root/scripts/common.sh"
+acquire_installer_lock
+acquire_plymouth_lock
 
 [[ -f $state_dir/.installed ]] || { echo "No TTFX installer state found." >&2; exit 1; }
 if [[ ! -f $installed_hashes ]]; then

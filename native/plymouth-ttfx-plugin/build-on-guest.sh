@@ -4,38 +4,23 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 engine_root="$root/../plymouth-ttfx-engine"
 engine_header="$engine_root/include/ttfx_plymouth.h"
-engine_archive="$engine_root/target/plymouth/libttfx_plymouth.a"
-remote=${PLYMOUTH_BUILD_HOST:-omatest@127.0.0.1}
-port=${PLYMOUTH_BUILD_PORT:-2222}
+# Build both languages on the target so cross-architecture lab runs cannot
+# accidentally link a host static library into the target Plymouth module.
+remote=${PLYMOUTH_BUILD_HOST:?Set PLYMOUTH_BUILD_HOST to the SSH target to validate}
+port=${PLYMOUTH_BUILD_PORT:-22}
 ssh_opts=(-p "$port" -o BatchMode=yes)
 scp_opts=(-P "$port" -o BatchMode=yes)
 
 "$root/generate-embedded-logo.py" --check
 grep -q 'TTFX_GLYPH_COUNT 523U' "$root/glyph-atlas.generated.h"
 grep -q '0x' "$root/glyph-atlas.generated.h"
-printf '%s\n' '== local Rust engine build =='
-(
-  cd "$engine_root"
-  cargo build --locked --offline --profile plymouth
-)
-[[ -f $engine_header ]] || { printf 'missing engine header: %s\n' "$engine_header" >&2; exit 1; }
-[[ -f $engine_archive ]] || { printf 'missing engine archive: %s\n' "$engine_archive" >&2; exit 1; }
-while IFS= read -r source; do
-  if [[ $source -nt $engine_archive ]]; then
-    printf 'stale engine archive: %s is newer than %s\n' "$source" "$engine_archive" >&2
-    exit 1
-  fi
-done < <(
-  find "$engine_root/src" "$engine_root/vendor" -type f \( -name '*.rs' -o -name 'Cargo.toml' \)
-  printf '%s\n' "$engine_root/Cargo.toml" "$engine_root/Cargo.lock" "$engine_header"
-)
 
-remote_dir=$(ssh "${ssh_opts[@]}" "$remote" 'mktemp -d /tmp/plymouth-ttfx-plugin.XXXXXX')
+remote_dir=$(ssh "${ssh_opts[@]}" "$remote" 'mktemp -d /var/tmp/plymouth-ttfx-plugin.XXXXXX')
 mkdir -p "$root/build"
 local_output=$(mktemp "$root/build/.plymouth-ttfx.so.XXXXXX")
 cleanup() {
   rm -f -- "$local_output"
-  ssh "${ssh_opts[@]}" "$remote" "rm -rf -- '$remote_dir'" >/dev/null 2>&1 || true
+  printf 'Retained target artifacts: %s:%s\n' "$remote" "$remote_dir"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -51,16 +36,20 @@ scp "${scp_opts[@]}" \
   "$root/tests/state-test.c" \
   "$root/tests/real-pixelbuffer-test.c" \
   "$engine_header" \
-  "$engine_archive" \
   "$remote:$remote_dir/"
+
+tar --exclude='./target' --exclude='./vendor/ttfx/target' -C "$engine_root" -cf - . |
+  ssh "${ssh_opts[@]}" "$remote" "mkdir -p '$remote_dir/engine' && tar -xf - -C '$remote_dir/engine'"
 
 ssh "${ssh_opts[@]}" "$remote" bash -s -- "$remote_dir" <<'REMOTE_BUILD'
 set -euo pipefail
 cd "$1"
+(cd engine && cargo build --locked --offline --profile plymouth)
+cp engine/target/plymouth/libttfx_plymouth.a .
 printf '%s\n' '== target =='
 package=$(pacman -Q plymouth)
 printf '%s\n' "$package"
-[[ $package == 'plymouth 26.134.222-2' ]] || { printf 'unexpected Plymouth package: %s\n' "$package" >&2; exit 1; }
+[[ $package == 'plymouth 26.134.222' || $package == 'plymouth 26.134.222-'* ]] || { printf 'unexpected Plymouth package: %s\n' "$package" >&2; exit 1; }
 printf '%s\n' '== pkg-config cflags =='
 pkgconf --cflags ply-splash-core ply-splash-graphics
 printf '%s\n' '== pkg-config libs =='

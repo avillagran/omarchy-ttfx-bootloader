@@ -168,6 +168,7 @@ publish_state() {
 
     theme_file=/usr/share/plymouth/themes/omarchy/omarchy.plymouth
     effects_file=/usr/share/plymouth/themes/omarchy/ttfx-effects.txt
+    module_file=/usr/lib/plymouth/ttfx-plymouth.so
     staging=
     backup=
     transaction_active=false
@@ -279,6 +280,16 @@ publish_state() {
     (( (8#$file_mode & 0022) == 0 ))
     size=$(stat -c %s -- "$theme_file")
     (( size > 0 && size <= 64 * 1024 ))
+
+    [[ -f $module_file && ! -L $module_file && -s $module_file ]] || {
+      echo "Native TTFX Plymouth module is not installed; install it before selecting an effect." >&2
+      exit 1
+    }
+    [[ $(realpath -e -- "$module_file") == "$module_file" ]]
+    validate_trusted_directory "${module_file%/*}"
+    (( $(stat -c %u -- "$module_file") == 0 ))
+    module_mode=$(stat -c %a -- "$module_file")
+    (( (8#$module_mode & 0022) == 0 ))
 
     staging=$(mktemp --tmpdir="${theme_file%/*}" .omarchy.plymouth.omarchy-new.XXXXXXXX)
     awk -v mode="$mode" -v effect="$effect" -v seed="$seed" -v enabled="$enabled" -v playback="$playback" '\''
