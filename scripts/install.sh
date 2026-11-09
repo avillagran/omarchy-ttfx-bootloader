@@ -5,6 +5,27 @@ set -eEuo pipefail
 export PATH=/usr/share/omarchy/bin:/usr/local/bin:/usr/bin:/usr/sbin
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+usage() {
+  cat <<'EOF'
+Usage: install.sh [--prebuilt | --build] [--prebuilt-base URL]
+  --prebuilt         install the release module pinned in prebuilt/manifest (default)
+  --build            compile the module on this machine (installs Rust if needed)
+  --prebuilt-base    fetch the pinned module from another URL (file:// works); the
+                     sha256 pin still applies
+EOF
+}
+build_mode=false
+prebuilt_base=
+while (( $# )); do
+  case "$1" in
+    --prebuilt) build_mode=false ;;
+    --build) build_mode=true ;;
+    --prebuilt-base) [[ -n ${2:-} ]] || { usage >&2; exit 2; }; prebuilt_base=$2; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+  esac
+  shift
+done
 # shellcheck source=scripts/common.sh
 source "$root/scripts/common.sh"
 acquire_installer_lock
@@ -48,18 +69,23 @@ on_failure() {
 # EXIT also covers explicit `exit 1` checks after the boot state changed.
 trap on_failure ERR HUP INT TERM EXIT
 
-# The module builds with root's cargo, else with the invoking user's: rustup
+# Prerequisites shared by both modes: the native helper inspects the module
+# with file, nm, readelf and ldd, and checks the ABI with pkgconf.
+missing=()
+required=(plymouth pkgconf python file binutils)
+$build_mode && required+=(base-devel)
+for package in "${required[@]}"; do
+  pacman -Q "$package" >/dev/null 2>&1 || missing+=("$package")
+done
+
+# Build mode compiles with root's cargo, else with the invoking user's: rustup
 # lives in ~/.cargo/bin, and Arch's /usr/bin/cargo can be a rustup shim with
 # no default toolchain for root. Install Arch's rust only when neither works.
 user_path="$user_home/.cargo/bin:$user_home/.local/share/mise/shims:$PATH"
 user_cargo() {
   runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" cargo "$@"
 }
-missing=()
-for package in base-devel pkgconf python plymouth; do
-  pacman -Q "$package" >/dev/null 2>&1 || missing+=("$package")
-done
-if ! cargo --version >/dev/null 2>&1 && ! user_cargo --version >/dev/null 2>&1; then
+if $build_mode && ! cargo --version >/dev/null 2>&1 && ! user_cargo --version >/dev/null 2>&1; then
   missing+=(rust)
 fi
 if (( ${#missing[@]} )); then
@@ -69,33 +95,63 @@ if (( ${#missing[@]} )); then
   fi
 fi
 install -d -m 0700 "$state_dir"
+module="$state_dir/ttfx-plymouth-$arch.so"
 
-build_inputs=(bin native default logo.txt)
-build_user_dir=
-if ! cargo --version >/dev/null 2>&1; then
-  if user_cargo --version >/dev/null 2>&1; then
-    build_user_dir=$(mktemp -d "${TMPDIR:-/var/tmp}/omarchy-ttfx-build.XXXXXXXX")
-    chown "$invoking_user:$user_group" "$build_user_dir"
-    install -d -m 0755 "$build_user_dir/source"
-    # Every input the build reads, including logo.txt for the embedded-logo check.
-    for input in "${build_inputs[@]}"; do
-      cp -a -- "$root/$input" "$build_user_dir/source/"
-    done
-    chown -hR "$invoking_user:$user_group" "$build_user_dir/source"
+if $build_mode; then
+  build_inputs=(bin native default logo.txt)
+  build_user_dir=
+  if ! cargo --version >/dev/null 2>&1; then
+    if user_cargo --version >/dev/null 2>&1; then
+      build_user_dir=$(mktemp -d "${TMPDIR:-/var/tmp}/omarchy-ttfx-build.XXXXXXXX")
+      chown "$invoking_user:$user_group" "$build_user_dir"
+      install -d -m 0755 "$build_user_dir/source"
+      # Every input the build reads, including logo.txt for the embedded-logo check.
+      for input in "${build_inputs[@]}"; do
+        cp -a -- "$root/$input" "$build_user_dir/source/"
+      done
+      chown -hR "$invoking_user:$user_group" "$build_user_dir/source"
+    else
+      printf 'No working cargo for root or %s. Install Rust (pacman -S rust) and retry.\n' "$invoking_user" >&2
+      exit 1
+    fi
+  fi
+
+  if [[ -n $build_user_dir ]]; then
+    runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" "$build_user_dir/source/bin/omarchy-plymouth-ttfx-build" build \
+      --output "$build_user_dir/ttfx-plymouth-$arch.so"
+    install -o root -g root -m 0755 "$build_user_dir/ttfx-plymouth-$arch.so" "$module"
+    printf 'Build source retained at %s\n' "$build_user_dir"
   else
-    printf 'No working cargo for root or %s. Install Rust (pacman -S rust) and retry.\n' "$invoking_user" >&2
+    "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
+  fi
+  module_origin="built on this machine"
+else
+  # The release module is pinned by sha256 in prebuilt/manifest, which the
+  # one-liner already verified as part of the source archive.
+  read_prebuilt_manifest "$root/prebuilt/manifest"
+  installed_plymouth=$(pacman -Q plymouth)
+  installed_plymouth=${installed_plymouth#plymouth }
+  if [[ $installed_plymouth != "$prebuilt_abi" && $installed_plymouth != "$prebuilt_abi-"* ]]; then
+    printf 'The prebuilt module targets Plymouth %s, this system has %s.\n' "$prebuilt_abi" "$installed_plymouth" >&2
+    echo 'Retry with --build to compile it here (curl ... | bash -s -- --build).' >&2
     exit 1
   fi
-fi
-
-module="$state_dir/ttfx-plymouth-$arch.so"
-if [[ -n $build_user_dir ]]; then
-  runuser -u "$invoking_user" -- env HOME="$user_home" PATH="$user_path" "$build_user_dir/source/bin/omarchy-plymouth-ttfx-build" build \
-    --output "$build_user_dir/ttfx-plymouth-$arch.so"
-  install -o root -g root -m 0755 "$build_user_dir/ttfx-plymouth-$arch.so" "$module"
-  printf 'Build source retained at %s\n' "$build_user_dir"
-else
-  "$root/bin/omarchy-plymouth-ttfx-build" build --output "$module"
+  [[ -n ${prebuilt_sha256[$arch]:-} ]] || { echo "No prebuilt module for $arch; retry with --build." >&2; exit 1; }
+  download=$(mktemp "$state_dir/.ttfx-plymouth-$arch.XXXXXXXX")
+  if ! curl -fsSL "${prebuilt_base:-$prebuilt_release}/ttfx-plymouth-$arch.so" -o "$download"; then
+    rm -f -- "$download"
+    echo "Could not download the prebuilt module; retry later or with --build." >&2
+    exit 1
+  fi
+  if ! printf '%s  %s\n' "${prebuilt_sha256[$arch]}" "$download" | sha256sum -c --quiet -; then
+    rm -f -- "$download"
+    echo "The prebuilt module does not match its pinned sha256; nothing was installed." >&2
+    exit 1
+  fi
+  chown root:root "$download"
+  chmod 0755 "$download"
+  mv -fT -- "$download" "$module"
+  module_origin="prebuilt for Plymouth $prebuilt_abi"
 fi
 
 # Build first; hold the common Plymouth lock only while snapshotting and
@@ -192,4 +248,4 @@ if ! runuser -u "$invoking_user" -- python3 "$root/scripts/menu-extension.py" ad
 fi
 
 printf 'Pre-attempt backup retained at %s\n' "$transaction_dir"
-printf 'Installed TTFX Plymouth for %s (2x, effect=%s), %s. Reboot to test it.\n' "$arch" "$current" "$menu_status"
+printf 'Installed TTFX Plymouth for %s (%s, 2x, effect=%s), %s. Reboot to test it.\n' "$arch" "$module_origin" "$current" "$menu_status"

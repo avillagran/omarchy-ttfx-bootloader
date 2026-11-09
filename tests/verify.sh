@@ -9,7 +9,7 @@ for command in cargo gcc python3 node strace pkg-config; do
 done
 pkg-config --exists ply-splash-core ply-splash-graphics
 printf 'Verification host: %s (%s)\n' "$(hostname)" "$(uname -m)"
-for test in installer-static install-transaction-test kbd-order-test menu-extension-test \
+for test in installer-static install-transaction-test prebuilt-manifest-test kbd-order-test menu-extension-test \
   shell.d/plymouth-effect-switcher-test shell.d/plymouth-native-install-test \
   shell.d/plymouth-native-package-test; do
   bash "tests/$test.sh"

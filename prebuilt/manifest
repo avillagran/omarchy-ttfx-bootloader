@@ -1,0 +1,7 @@
+# Release modules for the one-liner's default (prebuilt) mode, built by
+# scripts/build-prebuilt.sh. Parsed as data by scripts/common.sh.
+abi=26.134.222
+release=https://github.com/avillagran/omarchy-ttfx-bootloader/releases/download/plymouth-ttfx-26.134.222-r1
+source_commit=77f1c0ed21bb90f59b9a188fbeb9a6e5f71476b2
+x86_64=a9f68ec365dd88ddfdce65e2a49a29787c007e58f5599a812ed572bb02ec9af9
+aarch64=dec166f0700fda817b00cc6efe7bdc1729c6421b83ddf28c50f7e1083c6f7bac

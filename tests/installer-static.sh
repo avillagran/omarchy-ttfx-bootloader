@@ -15,6 +15,16 @@ grep -F 'OMARCHY_TTFX_ARCHIVE' "$root/install.sh" >/dev/null || fail "oneliner c
 grep -F 'OMARCHY_TTFX_SHA256' "$root/install.sh" >/dev/null || fail "oneliner staging archive cannot be hash-pinned"
 pass "oneliner enters sudo and supports hash-pinned staging"
 
+grep -F 'sudo "$tmp/scripts/install.sh" "$@"' "$root/install.sh" >/dev/null || fail "oneliner drops --build/--prebuilt"
+grep -F -- '--build) build_mode=true' "$root/scripts/install.sh" >/dev/null || fail "installer has no build mode"
+grep -Fx 'build_mode=false' "$root/scripts/install.sh" >/dev/null || fail "prebuilt is not the default mode"
+grep -F 'sha256sum -c --quiet -' "$root/scripts/install.sh" >/dev/null || fail "prebuilt module is not hash-verified"
+grep -F 'read_prebuilt_manifest "$root/prebuilt/manifest"' "$root/scripts/install.sh" >/dev/null || fail "prebuilt pin is not read from the archive"
+if grep -E '^[[:space:]]*(source|\.)[[:space:]].*manifest' "$root/scripts/install.sh" "$root/scripts/common.sh" >/dev/null; then
+  fail "prebuilt manifest is executed"
+fi
+pass "oneliner defaults to the pinned prebuilt module and keeps --build"
+
 grep -Fx '#define TTFX_PLAYBACK_STEPS_PER_TICK 2U' "$root/native/plymouth-ttfx-plugin/state.h" >/dev/null || fail "native state is not 2x"
 grep -Fx '#define ENGINE_STEPS_PER_TICK 2U' "$root/native/plymouth-ttfx-plugin/plugin.c" >/dev/null || fail "handoff contract is not 2x"
 grep -Fx 'const BOOT_STEPS_PER_TICK: usize = 2;' "$root/bridge/src/main.rs" >/dev/null || fail "desktop bridge is not 2x"
@@ -79,7 +89,7 @@ pass "only the installer itself rolls back"
 
 # The unprivileged build copies only build_inputs; that copy must pass the
 # build's own embedded-logo freshness check.
-inputs_line=$(grep -E '^build_inputs=\(' "$root/scripts/install.sh") || fail "installer declares no build inputs"
+inputs_line=$(grep -E '^[[:space:]]*build_inputs=\(' "$root/scripts/install.sh") || fail "installer declares no build inputs"
 eval "$inputs_line"
 build_copy=$(mktemp -d "${TMPDIR:-/var/tmp}/ttfx-build-inputs.XXXXXXXX")
 for input in "${build_inputs[@]}"; do

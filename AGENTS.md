@@ -31,7 +31,11 @@ LUKS unlock screen, installed on Omarchy 4.5 (x86_64 and aarch64) by a one-liner
   `omarchy` Plymouth theme, rebuilds UKI/initramfs, verifies the boot image, and
   records the hash of every file it wrote for `scripts/uninstall.sh`.
 - One-liner: `curl -fsSL .../main/install.sh | bash`; the root bootstrap pins an
-  immutable commit archive and verifies its sha256 before installing.
+  immutable commit archive and verifies its sha256 before installing. By default
+  it installs the prebuilt module pinned in `prebuilt/manifest` (GitHub release
+  asset plus sha256); `bash -s -- --build` compiles on the machine instead.
+- `scripts/build-prebuilt.sh` builds the release modules for both architectures
+  in rootless Arch containers (aarch64 through qemu-user) from a clean commit.
 
 ## Test
 
@@ -63,6 +67,9 @@ changes. The individual checks include:
 - The archive URL and sha256 pin in root `install.sh`, except when re-pinning to
   a newly pushed, tested commit (download the GitHub archive and verify its
   sha256 first).
+- The sha256 values in `prebuilt/manifest`, except when publishing modules built
+  by `scripts/build-prebuilt.sh`: download each release asset and verify it
+  matches before committing. Never commit the `.so` files themselves.
 - `native/plymouth-ttfx-plugin/tests/contract.sh` invariants: no simulation
   advance from `on_draw`; required FFI symbols stay literal.
 - `native/` and the runtime helpers in `bin/` are synced from the Omarchy branch

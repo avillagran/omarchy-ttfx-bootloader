@@ -9,4 +9,4 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$archive" -o "$tmp/source.tar.gz"
 printf '%s  %s\n' "$expected_sha256" "$tmp/source.tar.gz" | sha256sum -c -
 tar -xzf "$tmp/source.tar.gz" -C "$tmp" --strip-components=1
-sudo "$tmp/scripts/install.sh"
+sudo "$tmp/scripts/install.sh" "$@"

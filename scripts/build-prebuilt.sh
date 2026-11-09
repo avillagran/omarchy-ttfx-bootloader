@@ -35,6 +35,14 @@ for arch in "$@"; do
       pacman -Syu --noconfirm --needed base-devel rust plymouth pkgconf python file binutils >/dev/null
       mkdir /work && tar -xf /out/source.tar -C /work
       /work/bin/omarchy-plymouth-ttfx-build build --output "/out/ttfx-plymouth-$ARCH.so"
+      # Resolve every symbol against the distribution libply, as plymouthd does.
+      python3 -I -c "
+import ctypes, os, sys
+lib = ctypes.CDLL(sys.argv[1], os.RTLD_NOW)
+get = lib.ply_boot_splash_plugin_get_interface
+get.restype = ctypes.c_void_p
+assert get(), \"null plugin interface\"
+" "/out/ttfx-plymouth-$ARCH.so"
       {
         printf "%s: %s\n" "$ARCH" "$(pacman -Q plymouth)"
         printf "%s: %s\n" "$ARCH" "$(rustc --version)"

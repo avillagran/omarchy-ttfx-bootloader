@@ -2,9 +2,8 @@
 
 Native TTFX animation for Omarchy's Plymouth boot and LUKS unlock screen, for Omarchy 4.5 on x86_64 and aarch64.
 
-This development branch ports the complete boot integration to Omarchy quattro
-(base `6194f4606`) with the TTFX 0.5.1 engine. The public one-liners
-below retain their published archive pin until this branch is released.
+The boot integration targets Omarchy quattro (base `6194f4606`) with the
+TTFX 0.5.1 engine.
 
 ## Install
 
@@ -12,12 +11,20 @@ below retain their published archive pin until this branch is released.
 curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-ttfx-bootloader/main/install.sh | bash
 ```
 
+By default the installer uses a prebuilt module, so the machine needs no compiler. To compile the module on the machine instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/avillagran/omarchy-ttfx-bootloader/main/install.sh | bash -s -- --build
+```
+
 The installer downloads a pinned source archive and checks its sha256. It then:
 
-- installs the Arch packages the build needs;
-- builds the Plymouth 26 module locally from vendored TTFX 0.5.1, with root's Rust toolchain or yours (`~/.cargo/bin`);
+- installs the few Arch packages it needs: `plymouth`, `pkgconf`, `python`, `file` and `binutils`. `--build` also needs `base-devel`, and Rust if neither root nor you have a working toolchain (`~/.cargo/bin`);
+- by default, downloads the prebuilt module for the machine's architecture from the GitHub release named in `prebuilt/manifest`, and checks it against the sha256 pinned there. `--build` compiles it instead from vendored TTFX 0.5.1;
 - activates the `omarchy` theme;
 - rebuilds the UKI or initramfs and checks that the new image carries the module.
+
+The prebuilt modules target exactly the Plymouth ABI the build supports (`26.134.222`, the same on Arch x86_64 and Arch Linux ARM). On any other Plymouth version the default mode stops before changing anything and asks for `--build`.
 
 The native installer verifies only the boot images it rebuilds: owned Omarchy UKIs or the images named by mkinitcpio presets. Other distributions and hand-saved images are left untouched.
 
@@ -54,6 +61,10 @@ It also:
 - rebuilds the boot images.
 
 An install made by the 2026-09 installer must be upgraded by running the current installer once before it can be uninstalled.
+
+## Prebuilt modules
+
+`scripts/build-prebuilt.sh` builds both release modules from a clean commit inside rootless Arch containers. aarch64 runs under qemu-user, so the host needs `qemu-user-static` binfmt. The script prints each module's sha256 and records the toolchain versions in `build-info.txt`. Publish the modules as assets of a GitHub release, write that release URL and the sha256 values into `prebuilt/manifest`, and re-pin the one-liner to the commit that carries the manifest.
 
 ## Local verification
 

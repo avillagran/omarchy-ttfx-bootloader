@@ -197,3 +197,23 @@ rollback_install_transaction() {
   printf 'Pre-attempt backup retained at %s\n' "$transaction_dir" >&2
   return "$failed"
 }
+
+# prebuilt/manifest pins the release modules. It is parsed as data, never
+# sourced: abi=, release=, source_commit= and one sha256 per architecture.
+read_prebuilt_manifest() {
+  local manifest=$1 key value
+  declare -gA prebuilt_sha256=()
+  prebuilt_abi= prebuilt_release= prebuilt_commit=
+  [[ -f $manifest ]] || { echo "Missing prebuilt manifest: $manifest" >&2; return 1; }
+  while IFS='=' read -r key value; do
+    [[ -z $key || $key == \#* ]] && continue
+    case "$key" in
+      abi) [[ $value =~ ^[0-9]+(\.[0-9]+)+$ ]] && prebuilt_abi=$value ;;
+      release) [[ $value == https://github.com/* ]] && prebuilt_release=$value ;;
+      source_commit) [[ $value =~ ^[0-9a-f]{40}$ ]] && prebuilt_commit=$value ;;
+      x86_64|aarch64) [[ $value =~ ^[0-9a-f]{64}$ ]] && prebuilt_sha256[$key]=$value ;;
+    esac
+  done <"$manifest"
+  [[ -n $prebuilt_abi && -n $prebuilt_release && -n $prebuilt_commit ]] ||
+    { echo "Invalid prebuilt manifest: $manifest" >&2; return 1; }
+}
