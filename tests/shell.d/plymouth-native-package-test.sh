@@ -58,6 +58,8 @@ grep -Fq 'logo.image = Image("logo.png")' "$recovery_script" || fail "static rec
 if grep -Eq 'logo[.]frames|animation/frame-[^[:space:]]*[.]png' "$recovery_script"; then
   fail "static recovery cannot load animation frames"
 fi
+cmp -s "$ROOT/default/plymouth/boot-mark.png" "$tmp/pkg/usr/share/plymouth/themes/omarchy/boot-mark.png" ||
+  fail "stage ships the firmware-hold mark in the native theme's ImageDir"
 pass "ABI-matched release stages module and native/static themes"
 
 exports=$(nm -D --defined-only --format=posix "$module" | awk '{print $1}')

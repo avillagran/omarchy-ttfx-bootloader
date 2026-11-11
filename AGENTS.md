@@ -76,7 +76,9 @@ changes. The individual checks include:
   `feature/ttfx-plymouth-quattro`; change them there first. The deliberate
   difference: `bin/omarchy-plymouth-ttfx-install` here turns Off and corrupt
   selections into Decrypt, and the effect switcher keeps a literal prompt
-  because stock Omarchy has no translation key for it.
+  because stock Omarchy has no translation key for it, and
+  `bin/omarchy-plymouth-effect-list` falls back to `/usr/share/omarchy` when
+  `OMARCHY_PATH` is unset (the installer runs it outside a session).
 - Never write into the user's home as root: menu edits run through `runuser`.
 - No credentials, build artifacts, or machine-specific lab files in commits.
 

@@ -23,6 +23,11 @@ menu_extension="$user_home/.config/omarchy/extensions/omarchy-menu.jsonc"
 # Give back only what is still exactly as the install left it. A file changed
 # since, for example by an omarchy-settings update, already is someone
 # else's and stays as it is.
+# The bootloader theme goes first, while its apply script is still there.
+if [[ -x $boot_theme_apply ]] && ! "$boot_theme_apply" --remove; then
+  echo "The bootloader theme could not be removed; see /var/lib/omarchy-boot-theme." >&2
+fi
+
 left=()
 while IFS= read -r path; do
   if ours_now "$path"; then
@@ -50,6 +55,7 @@ if [[ $(plymouth-set-default-theme) != "$previous_theme" ]]; then
   plymouth-set-default-theme "$previous_theme"
 fi
 rmdir --ignore-fail-on-non-empty /etc/systemd/system/plymouth-quit.service.d 2>/dev/null || true
+rmdir --ignore-fail-on-non-empty "$boot_theme_share/grub.d" "$boot_theme_share" 2>/dev/null || true
 systemctl daemon-reload
 rebuild_boot_images
 

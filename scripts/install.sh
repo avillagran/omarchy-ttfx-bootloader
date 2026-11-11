@@ -204,6 +204,9 @@ install -m 0644 "$root/default/plymouth/omarchy.script" /usr/share/omarchy/defau
 install -m 0644 "$root/default/plymouth/omarchy.script" /usr/share/plymouth/themes/omarchy/omarchy.script
 install -m 0644 "$root/default/plymouth/ttfx-effects.txt" /usr/share/omarchy/default/plymouth/ttfx-effects.txt
 install -m 0644 "$root/default/plymouth/ttfx-effects.txt" /usr/share/plymouth/themes/omarchy/ttfx-effects.txt
+# The firmware-hold mark is theme-independent: branding changes never touch it.
+install -m 0644 "$root/default/plymouth/boot-mark.png" /usr/share/omarchy/default/plymouth/boot-mark.png
+install -m 0644 "$root/default/plymouth/boot-mark.png" /usr/share/plymouth/themes/omarchy/boot-mark.png
 install -m 0644 "$root/default/mkinitcpio/zz-ttfx-kbd-order.conf" /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf
 install -d -m 0755 /etc/systemd/system/plymouth-quit.service.d
 install -m 0644 "$root/default/systemd/system/plymouth-quit.service.d/10-omarchy-retain-splash.conf" \
@@ -212,6 +215,12 @@ install -m 0644 "$root/default/systemd/system/omarchy-plymouth-reap.service" /et
 install -m 0644 "$root/default/systemd/system/omarchy-plymouth-reap.timer" /etc/systemd/system/omarchy-plymouth-reap.timer
 # The 2026-09 drop-in's deactivate now runs inside 10-omarchy-retain-splash.conf.
 rm -f -- /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf
+install -d -m 0755 "$boot_theme_share/grub.d"
+install -m 0755 "$root/boot-theme/omarchy-boot-theme" "$boot_theme_share/omarchy-boot-theme"
+install -m 0755 "$root/boot-theme/omarchy-boot-theme-apply" "$boot_theme_apply"
+install -m 0644 "$root/boot-theme/logo-finals.txt" "$boot_theme_share/logo-finals.txt"
+install -m 0755 "$root/boot-theme/grub.d/09_omarchy-boot-theme" "$boot_theme_share/grub.d/09_omarchy-boot-theme"
+install -m 0755 "$root/boot-theme/grub.d/10_omarchy-boot-theme-end" "$boot_theme_share/grub.d/10_omarchy-boot-theme-end"
 systemctl daemon-reload
 boot_changed=true
 "$helper" --module "$module"
@@ -247,5 +256,12 @@ if ! runuser -u "$invoking_user" -- python3 "$root/scripts/menu-extension.py" ad
   menu_status="not added to the menu (see the message above); the boot animation is installed"
 fi
 
+# The bootloader theme shows the same mark in Limine or GRUB. Like the menu, a
+# theme that cannot be applied leaves the boot install in place.
+boot_theme_status="bootloader themed"
+if ! "$boot_theme_apply"; then
+  boot_theme_status="bootloader left unthemed (see the message above)"
+fi
+
 printf 'Pre-attempt backup retained at %s\n' "$transaction_dir"
-printf 'Installed TTFX Plymouth for %s (%s, 2x, effect=%s), %s. Reboot to test it.\n' "$arch" "$module_origin" "$current" "$menu_status"
+printf 'Installed TTFX Plymouth for %s (%s, 2x, effect=%s), %s, %s. Reboot to test it.\n' "$arch" "$module_origin" "$current" "$menu_status" "$boot_theme_status"

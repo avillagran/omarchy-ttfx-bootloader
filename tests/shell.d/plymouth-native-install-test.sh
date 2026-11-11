@@ -93,6 +93,7 @@ cat <<EOF
 usr/share/plymouth/themes/omarchy/omarchy.plymouth
 usr/share/plymouth/themes/omarchy/omarchy.script
 usr/share/plymouth/themes/omarchy/logo.png
+usr/share/plymouth/themes/omarchy/boot-mark.png
 usr/lib/libc.so.6
 EOF
 [[ -z ${TEST_EXTRA_INITRAMFS_PATH:-} ]] || printf '%s\n' "$TEST_EXTRA_INITRAMFS_PATH"
@@ -325,6 +326,10 @@ for entry in '[ttfx]' 'Enabled=true' 'Mode=fixed' 'Effect=decrypt' 'Seed=2232146
   grep -Fx "$entry" "$root/usr/share/plymouth/themes/omarchy/omarchy.plymouth" >/dev/null ||
     fail "upgrade normalization materializes complete native descriptor entry: $entry"
 done
+cmp -s "$ROOT/default/plymouth/boot-mark.png" "$root/usr/share/plymouth/themes/omarchy/boot-mark.png" ||
+  fail "native install leaves the theme's firmware-hold mark as installed"
+cmp -s "$ROOT/default/plymouth/boot-mark.png" "$root/usr/share/plymouth/themes/omarchy-static/boot-mark.png" ||
+  fail "static recovery is a complete copy of the theme, firmware-hold mark included"
 pass "successful install atomically publishes native state before rebuilding"
 pass "legacy package descriptor is normalized from immutable native template"
 
@@ -407,6 +412,7 @@ usr/lib/plymouth/ttfx-plymouth.so
 usr/share/plymouth/themes/omarchy/omarchy.plymouth
 usr/share/plymouth/themes/omarchy/omarchy.script
 usr/share/plymouth/themes/omarchy/logo.png
+usr/share/plymouth/themes/omarchy/boot-mark.png
 usr/lib/libc.so.6
 EOF
 SH
@@ -414,6 +420,33 @@ chmod +x "$tmp/bin/lsinitcpio"
 env OMARCHY_PLYMOUTH_TEST_ROOT="$root" OMARCHY_LSINITCPIO="$tmp/bin/lsinitcpio" OMARCHY_PLYMOUTH_TEST_DEPENDENCIES=/usr/lib/libc.so.6 \
   "$installer" --verify-initramfs "$root/boot/EFI/Linux/omarchy_linux.efi" >/dev/null || fail "initramfs verifier accepts stock-hook module/theme/dependency closure"
 pass "lsinitcpio contract proves stock hook inclusion without a custom hook"
+
+# boot-mark.png is optional. A theme that ships it must find it in the image;
+# a theme without it, such as a package built before the mark existed, holds on
+# the background alone and still verifies.
+cat >"$tmp/bin/lsinitcpio-no-mark" <<'SH'
+#!/bin/bash
+cat <<EOF
+usr/lib/plymouth/ttfx-plymouth.so
+usr/share/plymouth/themes/omarchy/omarchy.plymouth
+usr/share/plymouth/themes/omarchy/omarchy.script
+usr/share/plymouth/themes/omarchy/logo.png
+usr/lib/libc.so.6
+EOF
+SH
+chmod +x "$tmp/bin/lsinitcpio-no-mark"
+if env OMARCHY_PLYMOUTH_TEST_ROOT="$root" OMARCHY_LSINITCPIO="$tmp/bin/lsinitcpio-no-mark" OMARCHY_PLYMOUTH_TEST_DEPENDENCIES=/usr/lib/libc.so.6 \
+  "$installer" --verify-initramfs "$root/boot/EFI/Linux/omarchy_linux.efi" >/dev/null 2>"$tmp/err"; then
+  fail "initramfs verifier rejects an image without the firmware-hold mark the theme ships"
+fi
+grep -F 'initramfs is missing usr/share/plymouth/themes/omarchy/boot-mark.png' "$tmp/err" >/dev/null ||
+  fail "missing firmware-hold mark refusal names the file" "$(cat "$tmp/err")"
+mv -- "$root/usr/share/plymouth/themes/omarchy/boot-mark.png" "$tmp/retired-boot-mark.png"
+env OMARCHY_PLYMOUTH_TEST_ROOT="$root" OMARCHY_LSINITCPIO="$tmp/bin/lsinitcpio-no-mark" OMARCHY_PLYMOUTH_TEST_DEPENDENCIES=/usr/lib/libc.so.6 \
+  "$installer" --verify-initramfs "$root/boot/EFI/Linux/omarchy_linux.efi" >/dev/null 2>"$tmp/err" ||
+  fail "initramfs verifier accepts a theme without the optional firmware-hold mark" "$(cat "$tmp/err")"
+mv -- "$tmp/retired-boot-mark.png" "$root/usr/share/plymouth/themes/omarchy/boot-mark.png"
+pass "firmware-hold mark is verified when the theme ships it and optional otherwise"
 
 classic_root="$tmp/classic-root"
 cp -a "$root" "$classic_root"

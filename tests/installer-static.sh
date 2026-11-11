@@ -30,6 +30,14 @@ grep -Fx '#define ENGINE_STEPS_PER_TICK 2U' "$root/native/plymouth-ttfx-plugin/p
 grep -Fx 'const BOOT_STEPS_PER_TICK: usize = 2;' "$root/bridge/src/main.rs" >/dev/null || fail "desktop bridge is not 2x"
 pass "native and desktop handoff agree on 2x"
 
+for file in omarchy-boot-theme omarchy-boot-theme-apply logo-finals.txt grub.d/09_omarchy-boot-theme grub.d/10_omarchy-boot-theme-end; do
+  grep -F "\"\$boot_theme_share/$file\"" "$root/scripts/common.sh" >/dev/null || fail "boot theme file $file is not managed"
+  grep -F "$file" "$root/scripts/install.sh" >/dev/null || fail "boot theme file $file is not installed"
+done
+grep -F 'if ! "$boot_theme_apply"; then' "$root/scripts/install.sh" >/dev/null || fail "installer does not apply the boot theme non-fatally"
+grep -F '"$boot_theme_apply" --remove' "$root/scripts/uninstall.sh" >/dev/null || fail "uninstaller does not remove the boot theme"
+pass "bootloader theme is installed, applied non-fatally and removed"
+
 if grep -F 'add_option "Off"' "$root/bin/omarchy-plymouth-effect-switcher" >/dev/null; then
   fail "effect selector exposes Off"
 fi
@@ -80,6 +88,27 @@ grep -F 'ours_now "$path"' "$root/scripts/uninstall.sh" >/dev/null ||
 grep -F 'record_installed_hashes' "$root/scripts/install.sh" >/dev/null || fail "install records what it wrote"
 grep -Fx 'systemctl daemon-reload' "$root/scripts/uninstall.sh" >/dev/null || fail "uninstall leaves systemd with removed units"
 pass "uninstall gives back only files still as the install left them"
+
+python3 - "$root/default/plymouth/boot-mark.png" <<'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+assert data[:8] == b"\x89PNG\r\n\x1a\n" and data[12:16] == b"IHDR"
+width, height, depth, color = struct.unpack(">IIBB", data[16:26])
+assert (width, height, depth, color) == (300, 300, 8, 6), (width, height, depth, color)
+PY
+managed=$(bash -c 'source "$1"; managed_files' bash "$root/scripts/common.sh")
+for directory in /usr/share/plymouth/themes/omarchy /usr/share/omarchy/default/plymouth; do
+  grep -Fx "$directory/boot-mark.png" <<<"$managed" >/dev/null || fail "managed files miss $directory/boot-mark.png"
+  grep -Fx "install -m 0644 \"\$root/default/plymouth/boot-mark.png\" $directory/boot-mark.png" "$root/scripts/install.sh" >/dev/null ||
+    fail "installer does not install boot-mark.png into $directory"
+done
+# Branding refreshes publish only their listed assets and leave the rest of the
+# theme in place. The mark is theme-independent and absent from Omarchy source
+# trees that predate it, so it stays out of those lists.
+if grep -F 'boot-mark' "$root/bin/omarchy-plymouth-set" >/dev/null; then
+  fail "branding refresh takes over the theme-independent firmware-hold mark"
+fi
+pass "firmware-hold mark is a managed theme file that branding leaves alone"
 
 grep -F '(( BASHPID == $$ )) || exit "$status"' "$root/scripts/install.sh" >/dev/null ||
   fail "a failing subshell can roll the install back behind the installer's back"

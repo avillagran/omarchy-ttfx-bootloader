@@ -4,6 +4,11 @@ state_dir=/var/lib/omarchy-ttfx-bootloader
 helper=/usr/local/lib/omarchy-plymouth-ttfx-install
 installed_hashes=$state_dir/installed.sha256
 recovery_theme_dir=/usr/share/plymouth/themes/omarchy-static
+# The bootloader theme (Limine or GRUB): renderer and apply script. What the
+# apply script writes to the bootloader is its own business: it backs up every
+# file first under /var/lib/omarchy-boot-theme and --remove restores them.
+boot_theme_share=/usr/share/omarchy/boot-theme
+boot_theme_apply=$boot_theme_share/omarchy-boot-theme-apply
 transaction_dir=
 transaction_ready=false
 runtime_commands=(
@@ -23,15 +28,22 @@ managed_files() {
     /usr/share/plymouth/themes/omarchy/omarchy.plymouth \
     /usr/share/plymouth/themes/omarchy/omarchy.script \
     /usr/share/plymouth/themes/omarchy/ttfx-effects.txt \
+    /usr/share/plymouth/themes/omarchy/boot-mark.png \
     /usr/share/omarchy/default/plymouth/omarchy.plymouth \
     /usr/share/omarchy/default/plymouth/omarchy.script \
     /usr/share/omarchy/default/plymouth/ttfx-effects.txt \
+    /usr/share/omarchy/default/plymouth/boot-mark.png \
     /etc/plymouth/plymouthd.conf \
     /etc/mkinitcpio.conf.d/zz-ttfx-kbd-order.conf \
     /etc/systemd/system/plymouth-quit.service.d/10-omarchy-retain-splash.conf \
     /etc/systemd/system/plymouth-quit.service.d/20-ttfx-deactivate.conf \
     /etc/systemd/system/omarchy-plymouth-reap.service \
     /etc/systemd/system/omarchy-plymouth-reap.timer \
+    "$boot_theme_share/omarchy-boot-theme" \
+    "$boot_theme_share/omarchy-boot-theme-apply" \
+    "$boot_theme_share/logo-finals.txt" \
+    "$boot_theme_share/grub.d/09_omarchy-boot-theme" \
+    "$boot_theme_share/grub.d/10_omarchy-boot-theme-end" \
     "$helper"
   local directory command
   for directory in "${runtime_dirs[@]}"; do
