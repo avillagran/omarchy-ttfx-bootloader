@@ -2,6 +2,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <assert.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,10 +25,12 @@ struct ply_pixel_display {
         unsigned long height;
         ply_pixel_display_draw_handler_t draw_handler;
         void *draw_data;
+        const char *device_name;
 };
 
 struct ply_pixel_buffer { unsigned long width, height; uint32_t *pixels; int scale, rotation; };
 int ply_pixel_buffer_get_device_scale(ply_pixel_buffer_t *b) { return b->scale; }
+void ply_pixel_buffer_set_device_scale(ply_pixel_buffer_t *b, int scale) { b->scale = scale; }
 ply_pixel_buffer_rotation_t ply_pixel_buffer_get_device_rotation(ply_pixel_buffer_t *b) { return (ply_pixel_buffer_rotation_t)b->rotation; }
 unsigned long ply_pixel_buffer_get_width(ply_pixel_buffer_t *b) { return b->width; }
 unsigned long ply_pixel_buffer_get_height(ply_pixel_buffer_t *b) { return b->height; }
@@ -62,6 +65,9 @@ struct ply_key_file {
         const char *text;
         const char *message;
         const char *playback;
+        const char *firmware_hold;
+        const char *outro;
+        const char *outro_ms;
 };
 struct ply_buffer { int unused; };
 
@@ -130,6 +136,20 @@ static char created_effect[128];
 static uint64_t created_seed;
 static uint32_t created_background_rgb;
 static uint64_t mock_fade_now_ns = UINT64_C(1000000000);
+/* Reverse outro mock: history is refused unless a test enables it, so every
+ * older test keeps the behaviour without the outro. */
+static int32_t mock_history_status;
+static int32_t mock_begin_status;
+static unsigned int mock_fail_on_reverse_draw;
+static unsigned int history_enables;
+static unsigned int reverse_begins;
+static unsigned int reverse_draws;
+static uint32_t last_begin_max_calls;
+static uint32_t last_begin_frames_per_call;
+static bool mock_reverse_active;
+static uint32_t mock_reverse_calls;
+static uint32_t mock_reverse_done;
+#define MOCK_OUTRO_VISIBLE 1476U
 static uint64_t mock_fade_clock_ns(void) { return mock_fade_now_ns; }
 
 #define SECRET_ENTRY_PIXEL UINT32_C(0xffdec0de)
@@ -141,6 +161,18 @@ static TtfxCell mock_cells[162U * 20U];
 
 /* Never touch the host /run, even if this test is launched as root. */
 #define ttfx_handoff_open test_handoff_open
+/* Never write a real framebuffer or the kernel log from a test. */
+#define TTFX_FBCON_PATH "/nonexistent/ttfx-test-fb0"
+#define TTFX_KMSG_PATH "/nonexistent/ttfx-test-kmsg"
+/* Never read the host's sysfs: firmware-hold tests point these at fixtures
+ * under ${TMPDIR:-/var/tmp}; every other test sees no device-tree framebuffer
+ * and no firmware display, so it keeps the behaviour without the hold. */
+static char test_sysfs_drm_path[PATH_MAX] = "/nonexistent/ttfx-test-sysfs-drm";
+static char test_devicetree_chosen_path[PATH_MAX] = "/nonexistent/ttfx-test-devicetree-chosen";
+static char test_devicetree_soc_path[PATH_MAX] = "/nonexistent/ttfx-test-devicetree-soc";
+#define TTFX_SYSFS_DRM_PATH test_sysfs_drm_path
+#define TTFX_DEVICETREE_CHOSEN_PATH test_devicetree_chosen_path
+#define TTFX_DEVICETREE_SOC_PATH test_devicetree_soc_path
 #include "../plugin.c"
 #undef ttfx_handoff_open
 int test_handoff_open(void) { return -1; }
@@ -161,6 +193,9 @@ char *ply_key_file_get_value(ply_key_file_t *key_file, const char *section, cons
         else if (strcmp(key, "TextColor") == 0) value = key_file->text;
         else if (strcmp(key, "MessageColor") == 0) value = key_file->message;
         else if (strcmp(key, "PlaybackMode") == 0) value = key_file->playback;
+        else if (strcmp(key, "FirmwareHold") == 0) value = key_file->firmware_hold;
+        else if (strcmp(key, "Outro") == 0) value = key_file->outro;
+        else if (strcmp(key, "OutroMs") == 0) value = key_file->outro_ms;
         if (value == NULL)
                 return NULL;
         copy = malloc(strlen(value) + 1U);
@@ -208,6 +243,15 @@ void ply_event_loop_stop_watching_for_timeout(ply_event_loop_t *loop,
 }
 
 unsigned long ply_pixel_display_get_width(ply_pixel_display_t *display) { return display->width; }
+/* The stub renderer is the display itself. */
+ply_renderer_t *ply_pixel_display_get_renderer(ply_pixel_display_t *display)
+{
+        return (ply_renderer_t *)(void *)display;
+}
+const char *ply_renderer_get_device_name(ply_renderer_t *renderer)
+{
+        return renderer != NULL ? ((ply_pixel_display_t *)(void *)renderer)->device_name : NULL;
+}
 unsigned long ply_pixel_display_get_height(ply_pixel_display_t *display) { return display->height; }
 
 void ply_pixel_display_set_draw_handler(ply_pixel_display_t *display,
@@ -222,14 +266,15 @@ void ply_pixel_display_set_draw_handler(ply_pixel_display_t *display,
                 draw_handler_sets++;
 }
 
+static ply_pixel_buffer_t *sync_buffer;
+static ply_pixel_display_t *sync_display;
+
 void ply_pixel_display_draw_area(ply_pixel_display_t *display, int x, int y, int width, int height)
 {
-        (void)display;
-        (void)x;
-        (void)y;
-        (void)width;
-        (void)height;
         draw_requests++;
+        /* Opt-in: draw at once, as Plymouth's pixel display does. */
+        if (sync_display == display && sync_buffer != NULL && display->draw_handler != NULL)
+                display->draw_handler(display->draw_data, sync_buffer, x, y, width, height, display);
 }
 
 void ply_pixel_buffer_push_clip_area(ply_pixel_buffer_t *buffer, ply_rectangle_t *area)
@@ -328,6 +373,9 @@ ply_image_t *ply_image_new(const char *filename)
         } else if (strcmp(name, "entry.png") == 0) {
                 image->width = 286L;
                 image->height = 48L;
+        } else if (strcmp(name, "boot-mark.png") == 0) {
+                image->width = 512L;
+                image->height = 512L;
         } else if (strcmp(name, "progress_box.png") == 0 ||
                    strcmp(name, "progress_bar.png") == 0) {
                 image->width = 300L;
@@ -536,6 +584,50 @@ int32_t ttfx_engine_reset(TtfxEngine *engine)
 {
         assert(engine == &mock_engine);
         engine_resets++;
+        mock_reverse_active = false;
+        return TTFX_STATUS_OK;
+}
+
+int32_t ttfx_engine_record_history(TtfxEngine *engine, uint32_t max_frames, size_t max_bytes)
+{
+        assert(engine == &mock_engine);
+        assert(max_frames == 128U && max_bytes == (size_t)4U * 1024U * 1024U);
+        history_enables++;
+        return mock_history_status;
+}
+
+/* The mock reverse shows MOCK_OUTRO_VISIBLE logo cells shrinking linearly
+ * to none over its calls; the last call exposes the blank canvas. */
+static void mock_fill_visible(unsigned int visible)
+{
+        for (size_t index = 0U; index < 162U * 20U; index++) {
+                if (index < visible)
+                        mock_cells[index] = (TtfxCell){.codepoint = UINT32_C(0x2588),
+                                                       .fg_rgba = UINT32_C(0xd0fdd9ff),
+                                                       .flags = TTFX_CELL_FG};
+                else
+                        mock_cells[index] = (TtfxCell){.codepoint = 0x20U};
+        }
+}
+
+int32_t ttfx_engine_begin_reverse(TtfxEngine *engine, uint32_t max_calls, uint32_t frames_per_call,
+                                  uint32_t *out_calls)
+{
+        assert(engine == &mock_engine);
+        assert(out_calls != NULL);
+        *out_calls = 0U;
+        reverse_begins++;
+        last_begin_max_calls = max_calls;
+        last_begin_frames_per_call = frames_per_call;
+        if (mock_history_status != TTFX_STATUS_OK)
+                return TTFX_STATUS_UNAVAILABLE;
+        if (mock_begin_status != TTFX_STATUS_OK)
+                return mock_begin_status;
+        assert(!mock_reverse_active);
+        mock_reverse_active = true;
+        mock_reverse_calls = max_calls;
+        mock_reverse_done = 0U;
+        *out_calls = max_calls;
         return TTFX_STATUS_OK;
 }
 
@@ -543,15 +635,31 @@ int32_t ttfx_engine_draw_logo(TtfxEngine *engine, uint32_t mode,
                               uint8_t *out_looped, uint8_t *out_finished)
 {
         assert(engine == &mock_engine);
+        if (out_looped != NULL)
+                *out_looped = 0U;
+        if (out_finished != NULL)
+                *out_finished = 0U;
+        if (mode == TTFX_LOGO_MODE_REVERSE) {
+                assert(mock_reverse_active);
+                reverse_draws++;
+                if (mock_fail_on_reverse_draw == reverse_draws)
+                        return TTFX_STATUS_ENGINE_ERROR;
+                if (mock_reverse_done < mock_reverse_calls)
+                        mock_reverse_done++;
+                mock_fill_visible((unsigned int)((uint64_t)MOCK_OUTRO_VISIBLE *
+                                                 (mock_reverse_calls - mock_reverse_done) /
+                                                 mock_reverse_calls));
+                if (mock_reverse_done == mock_reverse_calls && out_finished != NULL)
+                        *out_finished = 1U;
+                return TTFX_STATUS_OK;
+        }
+        /* The plugin never plays forward during the outro. */
+        assert(!mock_reverse_active);
         engine_steps++;
         if (mock_fail_on_step == engine_steps)
                 return TTFX_STATUS_ENGINE_ERROR;
         if (mock_step_status != TTFX_STATUS_OK)
                 return mock_step_status;
-        if (out_looped != NULL)
-                *out_looped = 0U;
-        if (out_finished != NULL)
-                *out_finished = 0U;
         if (engine_steps == mock_loop_on_step) {
                 if (mode == TTFX_LOGO_MODE_LOOP) {
                         if (out_looped != NULL)
@@ -628,6 +736,17 @@ static void reset_counters(void)
         created_seed = 0U;
         created_background_rgb = 0U;
         mock_fade_now_ns = UINT64_C(1000000000);
+        mock_history_status = TTFX_STATUS_UNAVAILABLE;
+        mock_begin_status = TTFX_STATUS_OK;
+        mock_fail_on_reverse_draw = 0U;
+        history_enables = 0U;
+        reverse_begins = 0U;
+        reverse_draws = 0U;
+        last_begin_max_calls = 0U;
+        last_begin_frames_per_call = 0U;
+        mock_reverse_active = false;
+        mock_reverse_calls = 0U;
+        mock_reverse_done = 0U;
 }
 
 static void test_pending_validation_keeps_password_entry_visible_until_result(void)
@@ -2048,6 +2167,364 @@ static void test_hidpi_idle_publishes_complete_physical_raw(void)
         assert(rmdir(directory) == 0);
 }
 
+static void test_panel_taller_than_old_raw_bound_is_captured_and_published(void)
+{
+        char directory[] = "/dev/shm/ttfx-tall-panel.XXXXXX";
+        assert(mkdtemp(directory) != NULL);
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t display = {.width = 3456U, .height = 2234U};
+        uint32_t *pixels = calloc(3456U * 2234U, sizeof(*pixels));
+        assert(pixels != NULL);
+        ply_pixel_buffer_t buffer = {
+                .width = 3456U, .height = 2234U, .scale = 1, .pixels = pixels
+        };
+
+        reset_counters();
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        plugin->handoff_directory = open(directory, O_RDONLY | O_DIRECTORY);
+        assert(plugin->handoff_directory >= 0);
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        display.draw_handler(display.draw_data, &buffer, 0, 0, 3456, 2234,
+                             &display);
+        assert(plugin->views->raw_valid);
+        assert(plugin->views->raw_width == 3456U);
+        assert(plugin->views->raw_height == 2234U);
+        /* The desktop raw file shares the capture bound, so the panel is
+         * published too. */
+        assert(ttfx_raw_publish(plugin->handoff_directory, plugin->views->raw_pixels,
+                                plugin->views->raw_width, plugin->views->raw_height,
+                                plugin->views->raw_captured_ns));
+        struct stat info;
+        assert(fstatat(plugin->handoff_directory, TTFX_RAW_NAME, &info, AT_SYMLINK_NOFOLLOW) == 0);
+        assert(S_ISREG(info.st_mode) && info.st_size == (off_t)(48U + 3456U * 2234U * 4U));
+        ttfx_handoff_clear(plugin->handoff_directory);
+        destroy_plugin(plugin);
+        free(pixels);
+        assert(rmdir(directory) == 0);
+}
+
+/* The 16-inch MacBook Pro panel at device scale 2: 1728x1117 logical, a
+ * 3456x2234 physical frame published through the real idle path. */
+static void test_macbook_hidpi_idle_publishes_physical_raw(void)
+{
+        ply_key_file_t configured = {
+                .mode = "fixed", .enabled = "true", .effect = "decrypt", .seed = "7",
+                .playback = "continuous"
+        };
+        char directory[] = "/dev/shm/ttfx-macbook-raw.XXXXXX";
+        assert(mkdtemp(directory) != NULL);
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 1728U, .height = 1117U};
+        const size_t physical_width = 3456U;
+        const size_t physical_height = 2234U;
+        const size_t physical_pixels = physical_width * physical_height;
+        uint32_t *pixels = calloc(physical_pixels, sizeof(*pixels));
+        assert(pixels != NULL);
+        pixels[physical_width * 2161U + 4095U] = UINT32_C(0xff00ff00);
+        pixels[physical_pixels - 1U] = UINT32_C(0xffabcdef);
+        ply_pixel_buffer_t buffer = {
+                .width = 1728U, .height = 1117U, .scale = 2, .pixels = pixels
+        };
+
+        reset_counters();
+        ply_boot_splash_plugin_t *plugin = create_plugin(&configured);
+        plugin->handoff_directory = open(directory, O_RDONLY | O_DIRECTORY);
+        assert(plugin->handoff_directory >= 0);
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        display.draw_handler(display.draw_data, &buffer, 0, 0, 1728, 1117, &display);
+        assert(plugin->views->raw_valid);
+        become_idle(plugin, &trigger);
+
+        int raw_file = openat(plugin->handoff_directory, TTFX_RAW_NAME,
+                              O_RDONLY | O_NOFOLLOW);
+        uint8_t header[48U];
+        uint8_t pixel[4U];
+        struct stat info;
+        assert(raw_file >= 0);
+        assert(fstat(raw_file, &info) == 0);
+        assert(info.st_size == (off_t)(sizeof(header) + physical_pixels * 4U));
+        assert(read(raw_file, header, sizeof(header)) == (ssize_t)sizeof(header));
+        assert(memcmp(header, "OMBFRAW1", 8U) == 0);
+        assert(raw_little(header + 8U, 4U) == physical_width);
+        assert(raw_little(header + 12U, 4U) == physical_height);
+        assert(raw_little(header + 16U, 4U) == physical_width * 4U);
+        assert(raw_little(header + 24U, 8U) == physical_pixels * 4U);
+        /* The capture is the drawn buffer, and the file is the capture. */
+        assert(plugin->views->raw_pixels != NULL);
+        assert(memcmp(plugin->views->raw_pixels, pixels, physical_pixels * 4U) == 0);
+        uint8_t *payload = malloc(physical_pixels * 4U);
+        size_t done = 0U;
+        assert(payload != NULL);
+        while (done < physical_pixels * 4U) {
+                ssize_t got = read(raw_file, payload + done, physical_pixels * 4U - done);
+                assert(got > 0);
+                done += (size_t)got;
+        }
+        assert(read(raw_file, pixel, sizeof(pixel)) == 0);
+        close(raw_file);
+        for (size_t i = 0U; i < physical_pixels; i++)
+                assert(raw_little(payload + i * 4U, 4U) == (pixels[i] & UINT32_C(0xffffff)));
+        assert(raw_little(payload + (physical_pixels - 1U) * 4U, 4U) == UINT32_C(0xabcdef));
+        assert(raw_little(payload + (physical_width * 2161U + 4095U) * 4U, 4U) ==
+               (pixels[physical_width * 2161U + 4095U] & UINT32_C(0xffffff)));
+        free(payload);
+        ttfx_handoff_clear(plugin->handoff_directory);
+        destroy_plugin(plugin);
+        free(pixels);
+        assert(rmdir(directory) == 0);
+}
+
+static long glide_entry_y_for(unsigned int width, unsigned int height, int offset)
+{
+        ttfx_geometry_t g = ttfx_geometry_for_view(width, height);
+        return (long)g.grid_y + offset + (long)g.grid_height + 24L;
+}
+
+/* Apple Silicon: the firmware framebuffer (1728x1080 logical, no notch) is
+ * replaced by the native panel (1728x1117, notch rows on top) while the
+ * password prompt is up. The splash must start where the old display drew it,
+ * bottom-aligned, then glide into place within TTFX_DISPLAY_GLIDE_TICKS. */
+static void test_display_swap_glides_the_splash_into_place(void)
+{
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t firmware = {.width = 1728U, .height = 1080U};
+        ply_pixel_display_t native = {.width = 1728U, .height = 1117U};
+
+        reset_counters();
+        mock_fade_now_ns = UINT64_C(5000000000);
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        display_password(plugin, "Password", 0);
+        assert(last_entry_show_y == glide_entry_y_for(1728U, 1080U, 0));
+        const ttfx_geometry_t old_geometry = plugin->views->geometry;
+
+        remove_pixel_display(plugin, &firmware);
+        assert(plugin->swap_pending && plugin->views == NULL);
+        mock_fade_now_ns += UINT64_C(20000000);
+        add_pixel_display(plugin, &native);
+        assert(!plugin->swap_pending);
+        const ttfx_geometry_t final_geometry = ttfx_geometry_for_view(1728U, 1117U);
+        const int from = (int)old_geometry.grid_y + (1117 - 1080) - (int)final_geometry.grid_y;
+        assert(from > 0);
+        assert(plugin->views->glide_offset == from);
+        assert(plugin->views->geometry.grid_y == old_geometry.grid_y + (1117U - 1080U));
+        assert(last_entry_show_y == glide_entry_y_for(1728U, 1117U, from));
+
+        long previous = last_entry_show_y;
+        for (unsigned int tick = 0U; tick < TTFX_DISPLAY_GLIDE_TICKS; tick++) {
+                on_timeout(plugin, &loop);
+                assert(last_entry_show_y <= previous);
+                previous = last_entry_show_y;
+        }
+        assert(plugin->views->glide_offset == 0);
+        assert(plugin->views->geometry.grid_y == final_geometry.grid_y);
+        assert(last_entry_show_y == glide_entry_y_for(1728U, 1117U, 0));
+        destroy_plugin(plugin);
+
+        /* Too late, or another width: the new display just lays out normally. */
+        ply_pixel_display_t late_old = {.width = 1728U, .height = 1080U};
+        ply_pixel_display_t late_new = {.width = 1728U, .height = 1117U};
+        reset_counters();
+        plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &late_old);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        remove_pixel_display(plugin, &late_old);
+        mock_fade_now_ns += TTFX_DISPLAY_SWAP_WINDOW_NS + 1U;
+        add_pixel_display(plugin, &late_new);
+        assert(plugin->views->glide_offset == 0);
+        destroy_plugin(plugin);
+
+        ply_pixel_display_t wide_old = {.width = 1728U, .height = 1080U};
+        ply_pixel_display_t wide_new = {.width = 1920U, .height = 1080U};
+        reset_counters();
+        plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &wide_old);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        remove_pixel_display(plugin, &wide_old);
+        add_pixel_display(plugin, &wide_new);
+        assert(plugin->views->glide_offset == 0);
+        destroy_plugin(plugin);
+}
+
+static view_t *view_for_display(ply_boot_splash_plugin_t *plugin, ply_pixel_display_t *display)
+{
+        for (view_t *view = plugin->views; view != NULL; view = view->next) {
+                if (view->display == display)
+                        return view;
+        }
+        return NULL;
+}
+
+/* The display-swap bridge thread starts with a private copy of the removed
+ * view's last frame and is cancelled and joined promptly when the replacement
+ * display draws a full frame, when another swap starts, and on destroy. The
+ * test framebuffer path does not exist, so the thread only polls. */
+static void test_display_swap_bridge_lifecycle(void)
+{
+        const uint64_t prompt_ns = UINT64_C(500000000);
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t firmware = {.width = 160U, .height = 100U};
+        ply_pixel_display_t native = {.width = 160U, .height = 105U};
+        ply_pixel_buffer_t *old_buffer = ply_pixel_buffer_new(160U, 100U);
+        ply_pixel_buffer_t *new_buffer = ply_pixel_buffer_new(160U, 105U);
+        ply_boot_splash_plugin_t *plugin;
+        uint64_t started;
+
+        old_buffer->scale = 1;
+        new_buffer->scale = 1;
+        assert(swap_bridge_window_ns == TTFX_DISPLAY_SWAP_WINDOW_NS);
+
+        /* Cancelled by the replacement display's first full frame. */
+        reset_counters();
+        mock_fade_now_ns = UINT64_C(5000000000);
+        plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        firmware.draw_handler(firmware.draw_data, old_buffer, 0, 0, 160, 100, &firmware);
+        assert(plugin->views->raw_pixels != NULL);
+        assert(plugin->swap_bridge == NULL);
+        remove_pixel_display(plugin, &firmware);
+        assert(plugin->views == NULL && plugin->swap_pending);
+        assert(plugin->swap_bridge != NULL);
+        assert(plugin->swap_bridge->width == 160U && plugin->swap_bridge->height == 100U);
+        assert(plugin->swap_bridge->background == plugin->background_color);
+        assert(memcmp(plugin->swap_bridge->pixels, old_buffer->pixels,
+                      160U * 100U * sizeof(uint32_t)) == 0);
+        mock_fade_now_ns += UINT64_C(20000000);
+        add_pixel_display(plugin, &native);
+        assert(plugin->swap_bridge != NULL); /* bridging until the new display draws */
+        native.draw_handler(native.draw_data, new_buffer, 0, 0, 160, 10, &native);
+        assert(plugin->swap_bridge != NULL); /* a partial repaint is not a full frame */
+        started = monotonic_ns();
+        native.draw_handler(native.draw_data, new_buffer, 0, 0, 160, 105, &native);
+        assert(plugin->swap_bridge == NULL);
+        assert(monotonic_ns() - started < prompt_ns);
+
+        /* A swap of the native display starts a new bridge with its frame. */
+        remove_pixel_display(plugin, &native);
+        assert(plugin->swap_bridge != NULL);
+        assert(plugin->swap_bridge->width == 160U && plugin->swap_bridge->height == 105U);
+        /* Another swap stops it, even when the next removed display never drew. */
+        add_pixel_display(plugin, &firmware);
+        started = monotonic_ns();
+        remove_pixel_display(plugin, &firmware);
+        assert(plugin->swap_bridge == NULL);
+        assert(monotonic_ns() - started < prompt_ns);
+        destroy_plugin(plugin);
+
+        /* Destroy joins a bridge that is still polling. */
+        reset_counters();
+        plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        firmware.draw_handler(firmware.draw_data, old_buffer, 0, 0, 160, 100, &firmware);
+        remove_pixel_display(plugin, &firmware);
+        assert(plugin->swap_bridge != NULL && !atomic_load(&plugin->swap_bridge->done));
+        started = monotonic_ns();
+        destroy_plugin(plugin);
+        assert(monotonic_ns() - started < prompt_ns);
+
+        /* Without a usable framebuffer the thread gives up after the window. */
+        reset_counters();
+        swap_bridge_window_ns = UINT64_C(20000000);
+        plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        firmware.draw_handler(firmware.draw_data, old_buffer, 0, 0, 160, 100, &firmware);
+        remove_pixel_display(plugin, &firmware);
+        swap_bridge_window_ns = TTFX_DISPLAY_SWAP_WINDOW_NS;
+        assert(plugin->swap_bridge != NULL);
+        started = monotonic_ns();
+        while (!atomic_load(&plugin->swap_bridge->done)) {
+                struct timespec pause = {.tv_sec = 0, .tv_nsec = 1000000L};
+                assert(monotonic_ns() - started < UINT64_C(2000000000));
+                (void)nanosleep(&pause, NULL);
+        }
+        destroy_plugin(plugin);
+
+        /* Not visible, or idle: removing a display starts no bridge. */
+        reset_counters();
+        plugin = create_plugin(NULL);
+        add_pixel_display(plugin, &firmware);
+        remove_pixel_display(plugin, &firmware);
+        assert(plugin->swap_bridge == NULL);
+        destroy_plugin(plugin);
+
+        ply_pixel_buffer_free(old_buffer);
+        ply_pixel_buffer_free(new_buffer);
+}
+
+/* With an external monitor attached every view keeps its own last frame, so
+ * the console restore can use the one matching fb0; the desktop bridge's raw
+ * file stays single-view only. */
+static void test_every_view_is_captured_and_fbcon_picks_the_matching_one(void)
+{
+        ply_key_file_t configured = {
+                .mode = "fixed", .enabled = "true", .effect = "decrypt", .seed = "7",
+                .playback = "continuous"
+        };
+        char directory[] = "/dev/shm/ttfx-two-views.XXXXXX";
+        assert(mkdtemp(directory) != NULL);
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t internal = {.width = 80U, .height = 50U};
+        ply_pixel_display_t external = {.width = 120U, .height = 60U};
+        uint32_t *internal_pixels = calloc(160U * 100U, sizeof(uint32_t));
+        uint32_t *external_pixels = calloc(120U * 60U, sizeof(uint32_t));
+        assert(internal_pixels != NULL && external_pixels != NULL);
+        ply_pixel_buffer_t internal_buffer = {
+                .width = 80U, .height = 50U, .scale = 2, .pixels = internal_pixels
+        };
+        ply_pixel_buffer_t external_buffer = {
+                .width = 120U, .height = 60U, .scale = 1, .pixels = external_pixels
+        };
+
+        reset_counters();
+        ply_boot_splash_plugin_t *plugin = create_plugin(&configured);
+        plugin->handoff_directory = open(directory, O_RDONLY | O_DIRECTORY);
+        assert(plugin->handoff_directory >= 0);
+        add_pixel_display(plugin, &internal);
+        add_pixel_display(plugin, &external);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        internal.draw_handler(internal.draw_data, &internal_buffer, 0, 0, 80, 50, &internal);
+        external.draw_handler(external.draw_data, &external_buffer, 0, 0, 120, 60, &external);
+
+        view_t *internal_view = view_for_display(plugin, &internal);
+        view_t *external_view = view_for_display(plugin, &external);
+        assert(internal_view != NULL && external_view != NULL);
+        assert(internal_view->raw_pixels != NULL);
+        assert(internal_view->raw_width == 160U && internal_view->raw_height == 100U);
+        assert(external_view->raw_pixels != NULL);
+        assert(external_view->raw_width == 120U && external_view->raw_height == 60U);
+        assert(!internal_view->raw_valid && !external_view->raw_valid);
+
+        struct fb_var_screeninfo var = {.xres = 160U, .yres = 100U};
+        assert(fbcon_view_for(plugin, &var) == internal_view);
+        var = (struct fb_var_screeninfo){.xres = 120U, .yres = 60U};
+        assert(fbcon_view_for(plugin, &var) == external_view);
+        var = (struct fb_var_screeninfo){.xres = 160U, .yres = 112U};
+        assert(fbcon_view_for(plugin, &var) == NULL);
+
+        become_idle(plugin, &trigger);
+        assert(trigger.pulls == 1U);
+        assert(faccessat(plugin->handoff_directory, TTFX_RAW_NAME, F_OK, 0) != 0);
+        ttfx_handoff_clear(plugin->handoff_directory);
+        destroy_plugin(plugin);
+        free(internal_pixels);
+        free(external_pixels);
+        assert(rmdir(directory) == 0);
+}
+
 static void test_successful_password_finishes_without_green_fade(void)
 {
         char directory[] = "/dev/shm/ttfx-success-no-green.XXXXXX";
@@ -2099,8 +2576,877 @@ static void test_successful_password_finishes_without_green_fade(void)
         assert(rmdir(directory) == 0);
 }
 
+
+/* Firmware-hold fixture under ${TMPDIR:-/var/tmp}, retained for inspection:
+ * drm/card0 is bound to simple-framebuffer, drm/card1 to a native driver;
+ * chosen/ declares a device-tree framebuffer, chosen-empty/ does not. Every
+ * symlink points inside the fixture. */
+static char hold_fixture[PATH_MAX];
+
+static void hold_fixture_path(char *path, size_t size, const char *relative)
+{
+        int written = snprintf(path, size, "%s/%s", hold_fixture, relative);
+        assert(written > 0 && (size_t)written < size);
+}
+
+static void hold_fixture_mkdir(const char *relative)
+{
+        char path[PATH_MAX];
+
+        hold_fixture_path(path, sizeof(path), relative);
+        assert(mkdir(path, 0755) == 0);
+}
+
+static void hold_fixture_link(const char *driver, const char *relative)
+{
+        char target[PATH_MAX];
+        char path[PATH_MAX];
+
+        hold_fixture_path(target, sizeof(target), driver);
+        hold_fixture_path(path, sizeof(path), relative);
+        assert(symlink(target, path) == 0);
+}
+
+static void hold_fixture_u32(const char *relative, uint32_t value)
+{
+        char path[PATH_MAX];
+        const unsigned char bytes[4] = {(unsigned char)(value >> 24), (unsigned char)(value >> 16),
+                                        (unsigned char)(value >> 8), (unsigned char)value};
+        FILE *file;
+
+        hold_fixture_path(path, sizeof(path), relative);
+        file = fopen(path, "wb");
+        assert(file != NULL);
+        assert(fwrite(bytes, 1U, sizeof(bytes), file) == sizeof(bytes));
+        assert(fclose(file) == 0);
+}
+
+static void make_hold_fixture(void)
+{
+        const char *tmp = getenv("TMPDIR");
+        int written;
+
+        if (hold_fixture[0] != '\0')
+                return;
+        written = snprintf(hold_fixture, sizeof(hold_fixture), "%s/ttfx-firmware-hold.XXXXXX",
+                           tmp != NULL && tmp[0] != '\0' ? tmp : "/var/tmp");
+        assert(written > 0 && (size_t)written < sizeof(hold_fixture));
+        assert(mkdtemp(hold_fixture) != NULL);
+        hold_fixture_mkdir("drivers");
+        hold_fixture_mkdir("drivers/simple-framebuffer");
+        hold_fixture_mkdir("drivers/apple-dcp");
+        hold_fixture_mkdir("drm");
+        hold_fixture_mkdir("drm/card0");
+        hold_fixture_mkdir("drm/card0/device");
+        hold_fixture_mkdir("drm/card1");
+        hold_fixture_mkdir("drm/card1/device");
+        hold_fixture_link("drivers/simple-framebuffer", "drm/card0/device/driver");
+        hold_fixture_link("drivers/apple-dcp", "drm/card1/device/driver");
+        hold_fixture_mkdir("chosen");
+        hold_fixture_mkdir("chosen/framebuffer@10000000");
+        hold_fixture_mkdir("chosen-empty");
+        /* A 16" MacBook Pro: m1n1 hides the 74 notch rows of the 3456x2234
+         * panel and records them on the DCP node. */
+        hold_fixture_mkdir("chosen-notch");
+        hold_fixture_mkdir("chosen-notch/framebuffer@103d1579c00");
+        hold_fixture_u32("chosen-notch/framebuffer@103d1579c00/width", 3456U);
+        hold_fixture_u32("chosen-notch/framebuffer@103d1579c00/height", 2160U);
+        hold_fixture_mkdir("soc");
+        hold_fixture_mkdir("soc/dcp@389c00000");
+        hold_fixture_u32("soc/dcp@389c00000/apple,notch-height", 74U);
+        hold_fixture_path(test_sysfs_drm_path, sizeof(test_sysfs_drm_path), "drm");
+}
+
+static void use_devicetree_chosen(const char *relative)
+{
+        if (relative == NULL)
+                strcpy(test_devicetree_chosen_path, "/nonexistent/ttfx-test-devicetree-chosen");
+        else
+                hold_fixture_path(test_devicetree_chosen_path, sizeof(test_devicetree_chosen_path),
+                                  relative);
+}
+
+static ply_key_file_t hold_config(const char *firmware_hold)
+{
+        return (ply_key_file_t){
+                .image_dir = "/trusted/omarchy", .mode = "fixed", .enabled = "true",
+                .effect = "decrypt", .seed = "7", .firmware_hold = firmware_hold
+        };
+}
+
+/* Apple Silicon boot: the firmware framebuffer is replaced by the native
+ * display while the password prompt is pending. The hold shows only the mark,
+ * steps nothing, and the native display starts the splash from its first
+ * frame, prompt in its final place, without glide or bridge. */
+static void test_firmware_hold_waits_for_the_native_display(void)
+{
+        ply_key_file_t config = hold_config("true");
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t firmware = {.width = 1728U, .height = 1080U,
+                                        .device_name = "/dev/dri/card0"};
+        ply_pixel_display_t native = {.width = 1728U, .height = 1117U,
+                                      .device_name = "/dev/dri/card1"};
+        ply_pixel_buffer_t buffer = {.width = 1728U, .height = 1080U, .scale = 2};
+
+        make_hold_fixture();
+        reset_counters();
+        mock_fade_now_ns = UINT64_C(5000000000);
+        ply_boot_splash_plugin_t *plugin = create_plugin(&config);
+        assert(plugin != NULL && plugin->firmware_hold_enabled);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(plugin->views->firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, PLY_BOOT_SPLASH_MODE_BOOT_UP));
+        assert(plugin->firmware_hold && !plugin->firmware_hold_released);
+        assert(plugin->firmware_hold_started_ns == mock_fade_now_ns);
+        assert(plugin->mark_image != NULL);
+        assert(loop.timeout_watches == 1U);
+
+        display_password(plugin, "Password", 0);
+        display_password(plugin, "Password", 3);
+        assert(plugin->state.prompt_mode == TTFX_PROMPT_PASSWORD);
+        assert(plugin->state.bullets == 3);
+        assert(!plugin->views->state.prompt_visible);
+        assert(entry_shows == 0U && password_prompt_label_shows == 0U);
+        display_message(plugin, "hello");
+        assert(message_label_shows == 0U && !plugin->views->state.message_visible);
+
+        const unsigned int composites_before = image_composites;
+        firmware.draw_handler(firmware.draw_data, &buffer, 0, 0, 1728, 1080, &firmware);
+        assert(image_composites == composites_before + 1U);
+        assert(image_composite_x == (1728 - 128) / 2 && image_composite_y == (1080 - 128) / 2);
+        assert(plugin->firmware_hidden_notch == 0U);
+        assert(resized_image_width == 256L && resized_image_height == 256L);
+        assert(last_fill_source == ply_image_get_buffer(plugin->mark_scaled));
+        assert(last_fill_source->scale == 2);
+        assert(entry_draws == 0U && prompt_label_draws == 0U && message_label_draws == 0U);
+        assert(logo_color_fills == 0U);
+        assert(plugin->views->raw_pixels == NULL && !plugin->drawn_valid);
+        firmware.draw_handler(firmware.draw_data, &buffer, 0, 0, 1728, 1080, &firmware);
+        assert(image_resizes == 2U); /* lock once, mark once per scale */
+
+        for (unsigned int tick = 0U; tick < 600U; tick++) {
+                mock_fade_now_ns += UINT64_C(4166666);
+                on_timeout(plugin, &loop);
+        }
+        assert(plugin->firmware_hold);
+        assert(engine_steps == 0U);
+        assert(plugin->phase.step == 0U && plugin->phase.cycle == 0U);
+        assert(plugin->state.reaction_tick == 0U);
+        assert(loop.timeout_watches == 601U && plugin->timeout_scheduled);
+
+        remove_pixel_display(plugin, &firmware);
+        assert(plugin->views == NULL && plugin->firmware_hold);
+        assert(!plugin->swap_pending && plugin->swap_bridge == NULL);
+        mock_fade_now_ns += UINT64_C(20000000);
+        add_pixel_display(plugin, &native);
+        assert(!plugin->views->firmware);
+        assert(!plugin->firmware_hold && plugin->firmware_hold_released);
+        assert(plugin->views->state.prompt_visible);
+        assert(entry_shows == 1U);
+        assert(last_bullet_count == 3);
+        assert(last_entry_show_y == glide_entry_y_for(1728U, 1117U, 0));
+        assert(last_entry_show_x == (1728L - 286L) / 2L +
+                                    ttfx_state_reaction_x_offset(&plugin->state));
+        assert(plugin->views->glide_offset == 0);
+        assert(plugin->swap_bridge == NULL && !plugin->swap_pending);
+        assert(plugin->phase.step == 0U && plugin->phase.cycle == 0U);
+
+        on_timeout(plugin, &loop);
+        assert(engine_steps == ENGINE_STEPS_PER_TICK);
+        assert(plugin->phase.step == ENGINE_STEPS_PER_TICK);
+        assert(plugin->views->glide_offset == 0);
+
+        /* Never again: a firmware display later does not hold. */
+        ply_pixel_display_t firmware_again = {.width = 1728U, .height = 1080U,
+                                              .device_name = "/dev/dri/card0"};
+        add_pixel_display(plugin, &firmware_again);
+        assert(!plugin->firmware_hold);
+        destroy_plugin(plugin);
+}
+
+/* Without the native display the deadline starts the splash on the firmware
+ * framebuffer; a later swap then bridges and glides exactly as before. */
+static void test_firmware_hold_deadline_starts_the_splash(void)
+{
+        ply_key_file_t config = hold_config("true");
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t firmware = {.width = 160U, .height = 100U,
+                                        .device_name = "/dev/dri/card0"};
+        ply_pixel_display_t second_firmware = {.width = 160U, .height = 100U,
+                                               .device_name = "/dev/dri/card0"};
+        ply_pixel_display_t native = {.width = 160U, .height = 105U,
+                                      .device_name = "/dev/dri/card1"};
+        ply_pixel_buffer_t *buffer = ply_pixel_buffer_new(160U, 100U);
+
+        buffer->scale = 1;
+        make_hold_fixture();
+        reset_counters();
+        mock_fade_now_ns = UINT64_C(5000000000);
+        ply_boot_splash_plugin_t *plugin = create_plugin(&config);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(plugin->firmware_hold);
+        display_message(plugin, "hello");
+        assert(message_label_shows == 0U);
+
+        /* Firmware replaced by another firmware display: still holding. */
+        remove_pixel_display(plugin, &firmware);
+        assert(plugin->firmware_hold && plugin->swap_bridge == NULL && !plugin->swap_pending);
+        add_pixel_display(plugin, &second_firmware);
+        assert(plugin->firmware_hold && plugin->views->firmware);
+        assert(message_label_shows == 0U);
+
+        mock_fade_now_ns += TTFX_FIRMWARE_HOLD_NS - 1U;
+        on_timeout(plugin, &loop);
+        assert(plugin->firmware_hold && engine_steps == 0U);
+        mock_fade_now_ns += 1U;
+        on_timeout(plugin, &loop);
+        assert(!plugin->firmware_hold && plugin->firmware_hold_released);
+        assert(engine_steps == 0U && plugin->timeout_scheduled);
+        assert(message_label_shows == 1U && plugin->views->state.message_visible);
+        on_timeout(plugin, &loop);
+        assert(engine_steps == ENGINE_STEPS_PER_TICK);
+
+        second_firmware.draw_handler(second_firmware.draw_data, buffer, 0, 0, 160, 100,
+                                     &second_firmware);
+        assert(plugin->views->raw_pixels != NULL);
+        remove_pixel_display(plugin, &second_firmware);
+        assert(plugin->swap_pending && plugin->swap_bridge != NULL);
+        mock_fade_now_ns += UINT64_C(20000000);
+        add_pixel_display(plugin, &native);
+        assert(plugin->views->glide_offset != 0);
+        destroy_plugin(plugin);
+        ply_pixel_buffer_free(buffer);
+}
+
+static void test_firmware_hold_idle_and_hide_release_cleanly(void)
+{
+        ply_key_file_t config = hold_config("true");
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t firmware = {.width = 1280U, .height = 720U,
+                                        .device_name = "/dev/dri/card0"};
+
+        make_hold_fixture();
+        reset_counters();
+        ply_boot_splash_plugin_t *plugin = create_plugin(&config);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(plugin->firmware_hold);
+        display_password(plugin, "Password", 2);
+        become_idle(plugin, &trigger);
+        assert(trigger.pulls == 1U);
+        assert(plugin->idle && !plugin->firmware_hold && plugin->firmware_hold_released);
+        assert(!plugin->success_pending && engine_steps == 0U);
+        assert(entry_shows == 0U && !plugin->views->state.prompt_visible);
+        assert(!plugin->timeout_scheduled);
+        destroy_plugin(plugin);
+
+        reset_counters();
+        plugin = create_plugin(&config);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(plugin->firmware_hold);
+        hide_splash_screen(plugin, &loop);
+        assert(!plugin->firmware_hold && plugin->firmware_hold_released && !plugin->visible);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(!plugin->firmware_hold);
+        destroy_plugin(plugin);
+}
+
+/* FirmwareHold=false, auto without a device-tree framebuffer, a native
+ * display, or static mode: the splash starts at once, exactly as before. */
+static void test_firmware_hold_disabled_keeps_previous_behaviour(void)
+{
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t firmware = {.width = 1280U, .height = 720U,
+                                        .device_name = "/dev/dri/card0"};
+        ply_pixel_display_t native = {.width = 1280U, .height = 720U,
+                                      .device_name = "/dev/dri/card1"};
+        struct {
+                const char *firmware_hold;
+                const char *chosen;
+                const char *enabled;
+                ply_pixel_display_t *display;
+                bool configured;
+        } cases[] = {
+                {"false", "chosen", "true", &firmware, false},
+                {NULL, "chosen-empty", "true", &firmware, false},
+                {"auto", NULL, "true", &firmware, false},
+                {"bogus", "chosen-empty", "true", &firmware, false},
+                {"true", NULL, "true", &native, true},
+                {NULL, "chosen", "true", &native, true},
+                {"true", NULL, "false", &firmware, true},
+        };
+
+        make_hold_fixture();
+        for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); index++) {
+                ply_key_file_t config = hold_config(cases[index].firmware_hold);
+                ply_pixel_display_t *display = cases[index].display;
+
+                if (strcmp(cases[index].enabled, "false") == 0) {
+                        config.enabled = "false";
+                        config.mode = "off";
+                        config.effect = "off";
+                        config.seed = "0";
+                }
+                use_devicetree_chosen(cases[index].chosen);
+                reset_counters();
+                ply_boot_splash_plugin_t *plugin = create_plugin(&config);
+                assert(plugin->firmware_hold_enabled == cases[index].configured);
+                add_pixel_display(plugin, display);
+                assert(show_splash_screen(plugin, &loop, NULL, 0));
+                assert(!plugin->firmware_hold && plugin->mark_image == NULL);
+                display_password(plugin, "Password", 1);
+                assert(plugin->views->state.prompt_visible && entry_shows == 1U);
+                if (plugin->state.animation_enabled) {
+                        on_timeout(plugin, &loop);
+                        assert(engine_steps == ENGINE_STEPS_PER_TICK);
+                }
+                destroy_plugin(plugin);
+                display->draw_handler = NULL;
+                display->draw_data = NULL;
+        }
+
+        /* Auto with a device-tree framebuffer holds on a firmware display. */
+        ply_key_file_t config = hold_config(NULL);
+        use_devicetree_chosen("chosen");
+        reset_counters();
+        ply_boot_splash_plugin_t *plugin = create_plugin(&config);
+        assert(plugin->firmware_hold_enabled);
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(plugin->firmware_hold);
+        destroy_plugin(plugin);
+        use_devicetree_chosen(NULL);
+}
+
+/* Behind a hidden notch the hold mark moves up by half the notch, to where
+ * m1n1 centred its logo on the whole panel: 74 rows at scale 2 is 19 logical
+ * pixels (38 rows, one off the 37 that whole pixels cannot express). */
+static void test_firmware_hold_mark_clears_the_hidden_notch(void)
+{
+        ply_key_file_t config = hold_config(NULL);
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t firmware = {.width = 1728U, .height = 1080U,
+                                        .device_name = "/dev/dri/card0"};
+        ply_pixel_buffer_t buffer = {.width = 1728U, .height = 1080U, .scale = 2};
+
+        make_hold_fixture();
+        use_devicetree_chosen("chosen-notch");
+        hold_fixture_path(test_devicetree_soc_path, sizeof(test_devicetree_soc_path), "soc");
+        reset_counters();
+        ply_boot_splash_plugin_t *plugin = create_plugin(&config);
+        assert(plugin != NULL && plugin->firmware_hold_enabled);
+        assert(plugin->firmware_hidden_notch == 74U);
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, PLY_BOOT_SPLASH_MODE_BOOT_UP));
+        assert(plugin->firmware_hold);
+        firmware.draw_handler(firmware.draw_data, &buffer, 0, 0, 1728, 1080, &firmware);
+        assert(image_composite_x == (1728 - 128) / 2 && image_composite_y == (1080 - 128) / 2 - 19);
+        destroy_plugin(plugin);
+        firmware.draw_handler = NULL;
+        firmware.draw_data = NULL;
+
+        /* Hold off: nothing is read and nothing moves. */
+        config = hold_config("false");
+        reset_counters();
+        plugin = create_plugin(&config);
+        assert(plugin != NULL && !plugin->firmware_hold_enabled && plugin->firmware_hidden_notch == 0U);
+        destroy_plugin(plugin);
+        strcpy(test_devicetree_soc_path, "/nonexistent/ttfx-test-devicetree-soc");
+        use_devicetree_chosen(NULL);
+}
+
+/* A missing mark leaves the background alone; a wrong password typed blind is
+ * recorded and its reaction plays only after the release. */
+static void test_firmware_hold_without_mark_paints_background_only(void)
+{
+        ply_key_file_t config = hold_config("true");
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t firmware = {.width = 1280U, .height = 720U,
+                                        .device_name = "/dev/dri/card0"};
+        ply_pixel_buffer_t buffer = {.width = 1280U, .height = 720U, .scale = 1};
+
+        make_hold_fixture();
+        reset_counters();
+        ply_boot_splash_plugin_t *plugin = create_plugin(&config);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        mock_image_load_success = false;
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(plugin->firmware_hold && plugin->mark_image == NULL);
+        const unsigned int composites_before = image_composites;
+        clip_pushes = 0U;
+        firmware.draw_handler(firmware.draw_data, &buffer, 0, 0, 1280, 720, &firmware);
+        assert(image_composites == composites_before && clip_pushes == 1U);
+        assert(logo_color_fills == 0U && entry_draws == 0U);
+        destroy_plugin(plugin);
+}
+
+/* ---- Reverse outro ---------------------------------------------------- */
+
+#define OUTRO_TICK_NS UINT64_C(4166667)
+#define OUTRO_BG UINT32_C(0x0b0d10)
+
+static size_t visible_cells(const ply_boot_splash_plugin_t *plugin)
+{
+        size_t visible = 0U;
+
+        if (plugin->cells == NULL)
+                return 0U;
+        for (size_t index = 0U; index < plugin->cell_count; index++) {
+                const TtfxCell *cell = &plugin->cells[index];
+                if ((cell->flags & (TTFX_CELL_BG | TTFX_CELL_REVERSE)) != 0U ||
+                    ((cell->flags & TTFX_CELL_FG) != 0U && cell->codepoint != 0x20U &&
+                     cell->codepoint != 0U))
+                        visible++;
+        }
+        return visible;
+}
+
+static bool all_pixels(const uint32_t *pixels, size_t count, uint32_t value)
+{
+        for (size_t index = 0U; index < count; index++)
+                if (pixels[index] != value)
+                        return false;
+        return true;
+}
+
+/* Reads the published raw frame and checks it is entirely `rgb`, captured
+ * no later than now and within the 30 s freshness window. */
+static void assert_raw_is_plain(int directory, uint32_t width, uint32_t height, uint32_t rgb)
+{
+        size_t bytes = 48U + (size_t)width * height * 4U;
+        uint8_t *raw = malloc(bytes);
+        int file = openat(directory, TTFX_RAW_NAME, O_RDONLY | O_NOFOLLOW);
+        uint64_t now = ttfx_boottime_ns();
+
+        assert(raw != NULL && file >= 0);
+        assert(read(file, raw, bytes) == (ssize_t)bytes);
+        close(file);
+        assert(memcmp(raw, "OMBFRAW1", 8U) == 0);
+        assert(raw_little(raw + 8U, 4U) == width && raw_little(raw + 12U, 4U) == height);
+        uint64_t captured = raw_little(raw + 32U, 8U);
+        assert(captured != 0U && captured <= now && now - captured < UINT64_C(30000000000));
+        for (size_t offset = 48U; offset < bytes; offset += 4U)
+                assert(raw_little(raw + offset, 4U) == rgb);
+        free(raw);
+}
+
+static void test_outro_reverses_to_the_plain_background_and_completes_idle_once(void)
+{
+        char directory[] = "/dev/shm/ttfx-outro.XXXXXX";
+        assert(mkdtemp(directory) != NULL);
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 81U, .height = 10U};
+        uint32_t pixels[810] = {0};
+        ply_pixel_buffer_t buffer = {.width = 81U, .height = 10U, .scale = 1, .pixels = pixels};
+
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        assert(plugin->outro_enabled && plugin->outro_ms == 700U);
+        plugin->clock_ns = mock_fade_clock_ns;
+        plugin->handoff_directory = open(directory, O_RDONLY | O_DIRECTORY);
+        assert(plugin->handoff_directory >= 0);
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, PLY_BOOT_SPLASH_MODE_BOOT_UP));
+        assert(history_enables == 1U && plugin->outro_recording);
+        mock_fill_visible(MOCK_OUTRO_VISIBLE);
+        for (int tick = 0; tick < 4; tick++) {
+                mock_fade_now_ns += OUTRO_TICK_NS;
+                on_timeout(plugin, &loop);
+                display.draw_handler(display.draw_data, &buffer, 0, 0, 81, 10, &display);
+        }
+        display_message(plugin, "fsck done");
+        assert(plugin->views->state.message_visible);
+        const unsigned int forward_steps = engine_steps;
+
+        become_idle(plugin, &trigger);
+        assert(trigger.pulls == 0U && !plugin->idle && plugin->outro_active);
+        assert(reverse_begins == 1U && last_begin_max_calls == 168U &&
+               last_begin_frames_per_call == ENGINE_STEPS_PER_TICK);
+        assert(!plugin->views->state.message_visible && !plugin->views->state.prompt_visible);
+        assert(plugin->timeout_scheduled);
+        /* Messages arriving during the outro stay off screen. */
+        unsigned int message_shows = message_label_shows;
+        display_message(plugin, "late message");
+        assert(message_label_shows == message_shows && !plugin->views->state.message_visible);
+
+        size_t previous = MOCK_OUTRO_VISIBLE + 1U;
+        unsigned int ticks = 0U;
+        while (trigger.pulls == 0U) {
+                assert(ticks < 168U + 2U);
+                mock_fade_now_ns += OUTRO_TICK_NS;
+                on_timeout(plugin, &loop);
+                ticks++;
+                if (trigger.pulls != 0U)
+                        break;
+                size_t visible = visible_cells(plugin);
+                assert(visible <= previous);
+                previous = visible;
+                display.draw_handler(display.draw_data, &buffer, 0, 0, 81, 10, &display);
+        }
+        /* One reverse call per on-time tick, the blank one included, plus the
+         * tick that sees the blank frame drawn and completes idle. */
+        assert(reverse_draws == 168U && ticks == 169U);
+        assert(engine_steps == forward_steps);
+        assert(trigger.pulls == 1U && plugin->idle && !plugin->outro_active && plugin->outro_plain);
+        assert(visible_cells(plugin) == 0U);
+        assert(all_pixels(pixels, 810U, UINT32_C(0xff000000) | OUTRO_BG));
+        assert_raw_is_plain(plugin->handoff_directory, 81U, 10U, OUTRO_BG);
+        assert(faccessat(plugin->handoff_directory, TTFX_HANDOFF_NAME, F_OK, 0) != 0);
+        assert(all_pixels(plugin->views->raw_pixels, 810U, UINT32_C(0xff000000) | OUTRO_BG));
+        /* Idle is final: no further frames, and a second idle completes at once. */
+        on_timeout(plugin, &loop);
+        assert(reverse_draws == 168U);
+        become_idle(plugin, &trigger);
+        assert(trigger.pulls == 2U);
+        /* quit --retain-splash may still hide: nothing is republished. */
+        hide_splash_screen(plugin, &loop);
+        assert_raw_is_plain(plugin->handoff_directory, 81U, 10U, OUTRO_BG);
+        assert(trigger.pulls == 2U);
+        ttfx_handoff_clear(plugin->handoff_directory);
+        destroy_plugin(plugin);
+        assert(rmdir(directory) == 0);
+}
+
+static void test_outro_keeps_to_its_wall_clock_budget_when_ticks_run_late(void)
+{
+        ply_key_file_t configured = {
+                .mode = "fixed", .enabled = "true", .effect = "decrypt", .seed = "7",
+                .playback = "continuous", .outro_ms = "400"
+        };
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 81U, .height = 10U};
+        uint32_t pixels[810] = {0};
+        ply_pixel_buffer_t buffer = {.width = 81U, .height = 10U, .scale = 1, .pixels = pixels};
+
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        ply_boot_splash_plugin_t *plugin = create_plugin(&configured);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        on_timeout(plugin, &loop);
+        display.draw_handler(display.draw_data, &buffer, 0, 0, 81, 10, &display);
+        become_idle(plugin, &trigger);
+        assert(last_begin_max_calls == 96U);
+        /* Ticks at a quarter of the rate: each one catches up with the clock. */
+        mock_fade_now_ns += 4U * OUTRO_TICK_NS;
+        on_timeout(plugin, &loop);
+        assert(reverse_draws == 4U);
+        display.draw_handler(display.draw_data, &buffer, 0, 0, 81, 10, &display);
+        /* A stalled event loop: the budget is spent, so the blank frame comes
+         * on the very next tick no matter how many calls were left. */
+        mock_fade_now_ns += UINT64_C(2000000000);
+        on_timeout(plugin, &loop);
+        assert(reverse_draws == 96U && plugin->outro_plain);
+        /* The stub display does not draw synchronously: the next tick sees the
+         * drawn blank frame. Without any draw the wait expires instead. */
+        assert(trigger.pulls == 0U);
+        mock_fade_now_ns += OUTRO_TICK_NS;
+        on_timeout(plugin, &loop);
+        assert(trigger.pulls == 0U);
+        mock_fade_now_ns += OUTRO_DRAW_WAIT_NS;
+        on_timeout(plugin, &loop);
+        assert(trigger.pulls == 1U && plugin->idle);
+        destroy_plugin(plugin);
+}
+
+static void test_outro_starts_while_the_forward_animation_is_still_running(void)
+{
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 1280U, .height = 720U};
+        ply_pixel_buffer_t buffer = {0};
+
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        display_password(plugin, "Password", 3);
+        on_timeout(plugin, &loop);
+        assert(plugin->state.playback_phase == TTFX_PLAYBACK_INPUT);
+        assert(plugin->views->state.prompt_visible);
+        const unsigned int forward_steps = engine_steps;
+
+        become_idle(plugin, &trigger);
+        /* No success fast-forward first: the reverse starts from here. */
+        assert(plugin->outro_active && !plugin->success_pending);
+        assert(plugin->state.playback_phase == TTFX_PLAYBACK_INPUT);
+        assert(plugin->state.prompt_mode == TTFX_PROMPT_NONE && !plugin->views->state.prompt_visible);
+        assert(!plugin->progress_visible);
+        /* A late prompt cannot reappear or restart the engine. */
+        display_password(plugin, "Password", 0);
+        assert(!plugin->views->state.prompt_visible && engine_resets == 0U);
+        while (trigger.pulls == 0U) {
+                mock_fade_now_ns += OUTRO_TICK_NS;
+                on_timeout(plugin, &loop);
+                display.draw_handler(display.draw_data, &buffer, 0, 0, 1280, 720, &display);
+        }
+        assert(engine_steps == forward_steps && reverse_draws == 168U);
+        destroy_plugin(plugin);
+}
+
+static void test_outro_hide_during_the_outro_ends_on_plain_background_and_completes_idle(void)
+{
+        char directory[] = "/dev/shm/ttfx-outro-hide.XXXXXX";
+        assert(mkdtemp(directory) != NULL);
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 81U, .height = 10U};
+        uint32_t pixels[810] = {0};
+        ply_pixel_buffer_t buffer = {.width = 81U, .height = 10U, .scale = 1, .pixels = pixels};
+
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        plugin->handoff_directory = open(directory, O_RDONLY | O_DIRECTORY);
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        mock_fill_visible(MOCK_OUTRO_VISIBLE);
+        display.draw_handler(display.draw_data, &buffer, 0, 0, 81, 10, &display);
+        become_idle(plugin, &trigger);
+        for (int tick = 0; tick < 3; tick++) {
+                mock_fade_now_ns += OUTRO_TICK_NS;
+                on_timeout(plugin, &loop);
+        }
+        assert(reverse_draws == 3U && visible_cells(plugin) > 0U);
+        /* The stub does not draw on damage: draw like Plymouth would when the
+         * jump to the end damages every view. */
+        hide_splash_screen(plugin, &loop);
+        assert(reverse_draws == 168U && visible_cells(plugin) == 0U && plugin->outro_plain);
+        assert(trigger.pulls == 1U && plugin->idle && !plugin->visible);
+        /* The raw capture needs a real draw of the blank frame; with none,
+         * nothing is published rather than an older frame. */
+        assert(faccessat(plugin->handoff_directory, TTFX_RAW_NAME, F_OK, 0) != 0);
+        assert(all_pixels(plugin->views->raw_pixels, 810U, UINT32_C(0xff000000) | OUTRO_BG));
+        on_timeout(plugin, &loop);
+        assert(reverse_draws == 168U && trigger.pulls == 1U);
+        destroy_plugin(plugin);
+        assert(rmdir(directory) == 0);
+}
+
+static void test_outro_hide_without_idle_paints_plain_and_show_restarts(void)
+{
+        char directory[] = "/dev/shm/ttfx-outro-hide-only.XXXXXX";
+        assert(mkdtemp(directory) != NULL);
+        ply_event_loop_t loop = {0};
+        ply_pixel_display_t display = {.width = 81U, .height = 10U};
+        uint32_t pixels[810] = {0};
+        ply_pixel_buffer_t buffer = {.width = 81U, .height = 10U, .scale = 1, .pixels = pixels};
+
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        plugin->handoff_directory = open(directory, O_RDONLY | O_DIRECTORY);
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        mock_fill_visible(MOCK_OUTRO_VISIBLE);
+        on_timeout(plugin, &loop);
+        display.draw_handler(display.draw_data, &buffer, 0, 0, 81, 10, &display);
+        sync_buffer = &buffer;
+        sync_display = &display;
+        hide_splash_screen(plugin, &loop);
+        sync_buffer = NULL;
+        sync_display = NULL;
+        assert(reverse_begins == 1U && last_begin_max_calls == 1U && reverse_draws == 1U);
+        assert(plugin->outro_plain && visible_cells(plugin) == 0U);
+        assert(all_pixels(pixels, 810U, UINT32_C(0xff000000) | OUTRO_BG));
+        assert_raw_is_plain(plugin->handoff_directory, 81U, 10U, OUTRO_BG);
+        assert(faccessat(plugin->handoff_directory, TTFX_HANDOFF_NAME, F_OK, 0) != 0);
+
+        /* Shown again: the animation starts over and plays forward. */
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(engine_resets == 1U && !plugin->outro_plain && !plugin->outro_active);
+        assert(plugin->phase.step == 0U && plugin->phase.cycle == 0U);
+        const unsigned int forward_steps = engine_steps;
+        on_timeout(plugin, &loop);
+        assert(engine_steps == forward_steps + ENGINE_STEPS_PER_TICK);
+        ttfx_handoff_clear(plugin->handoff_directory);
+        destroy_plugin(plugin);
+        assert(rmdir(directory) == 0);
+}
+
+static void test_outro_none_and_unavailable_history_keep_the_previous_idle(void)
+{
+        ply_key_file_t none = {
+                .mode = "fixed", .enabled = "true", .effect = "decrypt", .seed = "7",
+                .playback = "continuous", .outro = "none"
+        };
+        ply_key_file_t continuous = {
+                .mode = "fixed", .enabled = "true", .effect = "decrypt", .seed = "7",
+                .playback = "continuous"
+        };
+        for (int variant = 0; variant < 3; variant++) {
+                ply_event_loop_t loop = {0};
+                ply_trigger_t trigger = {0};
+                ply_pixel_display_t display = {.width = 1280U, .height = 720U};
+                ply_pixel_buffer_t buffer = {0};
+
+                reset_counters();
+                /* 0: Outro=none; 1: no history; 2: history but the engine
+                 * declines the reverse. */
+                mock_history_status = variant == 1 ? TTFX_STATUS_UNAVAILABLE : TTFX_STATUS_OK;
+                if (variant == 2)
+                        mock_begin_status = TTFX_STATUS_UNAVAILABLE;
+                ply_boot_splash_plugin_t *plugin = create_plugin(variant == 0 ? &none : &continuous);
+                assert(plugin->outro_enabled == (variant != 0));
+                add_pixel_display(plugin, &display);
+                assert(show_splash_screen(plugin, &loop, NULL, 0));
+                assert(history_enables == (variant == 0 ? 0U : 1U));
+                on_timeout(plugin, &loop);
+                display.draw_handler(display.draw_data, &buffer, 0, 0, 1280, 720, &display);
+                become_idle(plugin, &trigger);
+                assert(trigger.pulls == 1U && plugin->idle && !plugin->outro_active && !plugin->outro_plain);
+                assert(reverse_draws == 0U && reverse_begins == (variant == 2 ? 1U : 0U));
+                assert(plugin->drawn_phase.step == 2U);
+                destroy_plugin(plugin);
+        }
+        /* Submit-to-finish without an outro still fast-forwards to the end. */
+        ply_key_file_t submit = {
+                .mode = "fixed", .enabled = "true", .effect = "decrypt", .seed = "7",
+                .outro = "none"
+        };
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 1280U, .height = 720U};
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        ply_boot_splash_plugin_t *plugin = create_plugin(&submit);
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        become_idle(plugin, &trigger);
+        assert(plugin->success_pending && trigger.pulls == 0U && reverse_begins == 0U);
+        destroy_plugin(plugin);
+}
+
+static void test_outro_engine_failure_ends_on_plain_background_at_once(void)
+{
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 81U, .height = 10U};
+        uint32_t pixels[810] = {0};
+        ply_pixel_buffer_t buffer = {.width = 81U, .height = 10U, .scale = 1, .pixels = pixels};
+
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        mock_fail_on_reverse_draw = 2U;
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        become_idle(plugin, &trigger);
+        mock_fade_now_ns += OUTRO_TICK_NS;
+        on_timeout(plugin, &loop);
+        assert(trigger.pulls == 0U);
+        mock_fade_now_ns += OUTRO_TICK_NS;
+        on_timeout(plugin, &loop);
+        assert(trigger.pulls == 1U && plugin->idle && plugin->static_degraded);
+        assert(plugin->engine == NULL && engine_frees == 1U && plugin->outro_plain);
+        logo_color_fills = 0U;
+        display.draw_handler(display.draw_data, &buffer, 0, 0, 81, 10, &display);
+        /* No static fallback mark: only the background. */
+        assert(logo_color_fills == 0U);
+        assert(all_pixels(pixels, 810U, UINT32_C(0xff000000) | OUTRO_BG));
+        destroy_plugin(plugin);
+}
+
+static void test_outro_only_for_the_boot_splash_and_never_after_a_firmware_hold(void)
+{
+        ply_event_loop_t loop = {0};
+        ply_trigger_t trigger = {0};
+        ply_pixel_display_t display = {.width = 1280U, .height = 720U};
+
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        ply_boot_splash_plugin_t *plugin = create_plugin(NULL);
+        add_pixel_display(plugin, &display);
+        assert(show_splash_screen(plugin, &loop, NULL, PLY_BOOT_SPLASH_MODE_SHUTDOWN));
+        assert(history_enables == 0U && !plugin->outro_recording);
+        become_idle(plugin, &trigger);
+        assert(reverse_begins == 0U && plugin->success_pending);
+        destroy_plugin(plugin);
+
+        ply_key_file_t config = hold_config("true");
+        ply_pixel_display_t firmware = {.width = 1280U, .height = 720U,
+                                        .device_name = "/dev/dri/card0"};
+        ply_trigger_t hold_trigger = {0};
+        make_hold_fixture();
+        reset_counters();
+        mock_history_status = TTFX_STATUS_OK;
+        plugin = create_plugin(&config);
+        plugin->clock_ns = mock_fade_clock_ns;
+        add_pixel_display(plugin, &firmware);
+        assert(show_splash_screen(plugin, &loop, NULL, 0));
+        assert(plugin->firmware_hold && plugin->outro_recording);
+        become_idle(plugin, &hold_trigger);
+        assert(hold_trigger.pulls == 1U && reverse_begins == 0U);
+        destroy_plugin(plugin);
+}
+
+static void test_outro_descriptor_keys_select_mode_and_clamped_budget(void)
+{
+        static const struct { const char *outro; const char *ms; bool enabled; uint32_t calls; } cases[] = {
+                {NULL, NULL, true, 168U},
+                {"reverse", "1200", true, 288U},
+                {"bogus", "5", true, 24U},
+                {"reverse", "99999", true, 360U},
+                {"reverse", "7OO", true, 168U},
+                {"none", "700", false, 0U},
+        };
+        for (size_t index = 0U; index < sizeof(cases) / sizeof(cases[0]); index++) {
+                ply_key_file_t configured = {
+                        .mode = "fixed", .enabled = "true", .effect = "decrypt", .seed = "7",
+                        .playback = "continuous", .outro = cases[index].outro,
+                        .outro_ms = cases[index].ms
+                };
+                ply_event_loop_t loop = {0};
+                ply_trigger_t trigger = {0};
+                ply_pixel_display_t display = {.width = 1280U, .height = 720U};
+
+                reset_counters();
+                mock_history_status = TTFX_STATUS_OK;
+                ply_boot_splash_plugin_t *plugin = create_plugin(&configured);
+                assert(plugin->outro_enabled == cases[index].enabled);
+                add_pixel_display(plugin, &display);
+                assert(show_splash_screen(plugin, &loop, NULL, 0));
+                become_idle(plugin, &trigger);
+                assert(last_begin_max_calls == cases[index].calls);
+                assert(trigger.pulls == (cases[index].enabled ? 0U : 1U));
+                destroy_plugin(plugin);
+        }
+}
+
 int main(void)
 {
+        test_outro_reverses_to_the_plain_background_and_completes_idle_once();
+        test_outro_keeps_to_its_wall_clock_budget_when_ticks_run_late();
+        test_outro_starts_while_the_forward_animation_is_still_running();
+        test_outro_hide_during_the_outro_ends_on_plain_background_and_completes_idle();
+        test_outro_hide_without_idle_paints_plain_and_show_restarts();
+        test_outro_none_and_unavailable_history_keep_the_previous_idle();
+        test_outro_engine_failure_ends_on_plain_background_at_once();
+        test_outro_only_for_the_boot_splash_and_never_after_a_firmware_hold();
+        test_outro_descriptor_keys_select_mode_and_clamped_budget();
+        test_firmware_hold_waits_for_the_native_display();
+        test_firmware_hold_deadline_starts_the_splash();
+        test_firmware_hold_idle_and_hide_release_cleanly();
+        test_firmware_hold_disabled_keeps_previous_behaviour();
+        test_firmware_hold_without_mark_paints_background_only();
+        test_firmware_hold_mark_clears_the_hidden_notch();
         test_pending_validation_keeps_password_entry_visible_until_result();
         test_original_progress_bar_replaces_pending_input_and_is_monotonic();
         test_pending_validation_cancels_without_stale_prompt();
@@ -2116,6 +3462,11 @@ int main(void)
         test_hidpi_idle_publishes_complete_physical_raw();
         test_reaction_never_replaces_clean_raw_with_unencoded_glitch_pixels();
         test_idle_publishes_clean_base_while_retained_password_is_visible();
+        test_panel_taller_than_old_raw_bound_is_captured_and_published();
+        test_macbook_hidpi_idle_publishes_physical_raw();
+        test_display_swap_glides_the_splash_into_place();
+        test_display_swap_bridge_lifecycle();
+        test_every_view_is_captured_and_fbcon_picks_the_matching_one();
         test_idle_publishes_exact_phase_once();
         test_idle_captures_drawn_not_pending_phase();
         test_successful_password_finishes_without_green_fade();

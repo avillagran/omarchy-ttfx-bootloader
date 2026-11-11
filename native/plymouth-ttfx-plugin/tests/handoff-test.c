@@ -23,6 +23,65 @@ static int test_renameat(int from, const char *a, int to, const char *b)
 #undef write
 #undef renameat
 
+static uint64_t little(const uint8_t *bytes, size_t count)
+{
+        uint64_t value = 0;
+        for (size_t i = 0; i < count; i++)
+                value |= (uint64_t)bytes[i] << (8U * i);
+        return value;
+}
+
+static uint32_t pattern_pixel(size_t index)
+{
+        /* Alpha set on purpose: the file must carry zero X bytes. */
+        return UINT32_C(0xff000000) | (uint32_t)((index * UINT64_C(2654435761)) & 0xffffffU);
+}
+
+static bool raw_publish_pattern(int dir, uint32_t width, uint32_t height)
+{
+        size_t count = (size_t)width * height;
+        uint32_t *pixels = malloc(count * sizeof(*pixels));
+        assert(pixels != NULL);
+        for (size_t i = 0; i < count; i++)
+                pixels[i] = pattern_pixel(i);
+        bool published = ttfx_raw_publish(dir, pixels, width, height, ttfx_boottime_ns());
+        free(pixels);
+        return published;
+}
+
+/* Publishes a width x height pattern and reads every byte back. */
+static void check_raw_frame(int dir, uint32_t width, uint32_t height)
+{
+        size_t count = (size_t)width * height;
+        size_t size = 48U + count * 4U;
+        struct stat st;
+        assert(raw_publish_pattern(dir, width, height));
+        int file = openat(dir, TTFX_RAW_NAME, O_RDONLY | O_NOFOLLOW);
+        assert(file >= 0 && fstat(file, &st) == 0);
+        assert(S_ISREG(st.st_mode) && (st.st_mode & 0777) == 0644);
+        assert(st.st_size == (off_t)size);
+        uint8_t *raw = malloc(size);
+        assert(raw != NULL);
+        size_t done = 0;
+        while (done < size) {
+                ssize_t got = read(file, raw + done, size - done);
+                assert(got > 0);
+                done += (size_t)got;
+        }
+        close(file);
+        assert(memcmp(raw, "OMBFRAW1", 8) == 0);
+        assert(little(raw + 8, 4) == width && little(raw + 12, 4) == height);
+        assert(little(raw + 16, 4) == (uint64_t)width * 4U);
+        assert(little(raw + 20, 4) == UINT32_C(0x34325258));
+        assert(little(raw + 24, 8) == (uint64_t)count * 4U);
+        assert(little(raw + 32, 8) != 0 && little(raw + 40, 8) == 0);
+        for (size_t i = 0; i < count; i++)
+                assert(little(raw + 48U + i * 4U, 4) == (pattern_pixel(i) & 0xffffffU));
+        free(raw);
+        ttfx_raw_clear(dir);
+        assert(faccessat(dir, TTFX_RAW_NAME, F_OK, 0) != 0);
+}
+
 int main(void)
 {
         char directory[] = "/dev/shm/ttfx-handoff-test.XXXXXX";
@@ -93,6 +152,25 @@ int main(void)
         assert(ttfx_raw_publish(dir, pixels, 2, 1, stamp));
         assert(fstatat(dir, TTFX_RAW_NAME, &st, AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(st.st_mode));
         ttfx_handoff_clear(dir);
+        assert(faccessat(dir, TTFX_RAW_NAME, F_OK, 0) != 0);
+
+        /* The raw bound matches the capture bound: a 16-inch MacBook Pro
+         * panel (3456x2234, above the old 4096x2160 height) is published
+         * pixel for pixel. */
+        assert(TTFX_RAW_MAX_WIDTH == TTFX_CAPTURE_MAX_WIDTH);
+        assert(TTFX_RAW_MAX_HEIGHT == TTFX_CAPTURE_MAX_HEIGHT);
+        check_raw_frame(dir, 3456U, 2234U);
+        /* Rows wider than the 16 KiB scratch are written in chunks. */
+        check_raw_frame(dir, TTFX_RAW_SCRATCH_PIXELS + 7U, 3U);
+        check_raw_frame(dir, TTFX_RAW_MAX_WIDTH, 2U);
+        fail_write = 1;
+        assert(!raw_publish_pattern(dir, TTFX_RAW_SCRATCH_PIXELS + 1U, 2U));
+        assert(faccessat(dir, TTFX_RAW_NAME, F_OK, 0) != 0);
+        assert(faccessat(dir, TTFX_RAW_TEMP, F_OK, 0) != 0);
+        fail_write = 0;
+        /* Out-of-bound dimensions are rejected before any pixel is read. */
+        assert(!ttfx_raw_publish(dir, pixels, TTFX_RAW_MAX_WIDTH + 1U, 1, stamp));
+        assert(!ttfx_raw_publish(dir, pixels, 1, TTFX_RAW_MAX_HEIGHT + 1U, stamp));
         assert(faccessat(dir, TTFX_RAW_NAME, F_OK, 0) != 0);
         close(dir);
         assert(rmdir(directory) == 0);

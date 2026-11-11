@@ -2,6 +2,7 @@
 #define TTFX_PLYMOUTH_STATE_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 /* Step zero is the snapshot returned by create/reset (already first next_frame).
@@ -15,8 +16,23 @@ typedef struct {
 #define TTFX_HANDOFF_TEMP ".omarchy-plymouth-handoff.state.tmp"
 #define TTFX_RAW_NAME "omarchy-plymouth-handoff.raw"
 #define TTFX_RAW_TEMP ".omarchy-plymouth-handoff.raw.tmp"
-#define TTFX_RAW_MAX_WIDTH 4096U
-#define TTFX_RAW_MAX_HEIGHT 2160U
+/* The last full repaint is kept at the panel's physical size for the fbcon
+ * handoff on quit and for the raw file, so large HiDPI panels (3456x2234 on a
+ * 16-inch MacBook Pro) are captured and published alike. */
+#define TTFX_CAPTURE_MAX_WIDTH 8192U
+#define TTFX_CAPTURE_MAX_HEIGHT 8192U
+/* The raw file accepts every frame the capture accepts. Rows are converted
+ * through a fixed TTFX_RAW_SCRATCH_PIXELS scratch (16 KiB), one write per
+ * chunk, so the stack cost does not grow with the bound. */
+#define TTFX_RAW_MAX_WIDTH TTFX_CAPTURE_MAX_WIDTH
+#define TTFX_RAW_MAX_HEIGHT TTFX_CAPTURE_MAX_HEIGHT
+#define TTFX_RAW_SCRATCH_PIXELS 4096U
+/* A display that replaces another of the same width within this window is the
+ * same panel seen by another driver (on Apple Silicon the firmware
+ * framebuffer leaves out the notch rows the native driver adds on top). The
+ * splash then starts where the old display drew it and glides into place. */
+#define TTFX_DISPLAY_SWAP_WINDOW_NS UINT64_C(2000000000)
+#define TTFX_DISPLAY_GLIDE_TICKS 96U
 uint64_t ttfx_boottime_ns(void);
 void ttfx_raw_clear(int directory);
 bool ttfx_raw_publish(int directory, const uint32_t *pixels, uint32_t width,
@@ -147,7 +163,79 @@ void ttfx_load_state_record_view(ttfx_load_state_t *state, bool loaded);
 bool ttfx_load_state_can_show(const ttfx_load_state_t *state);
 bool ttfx_dynamic_view_should_keep(bool loaded);
 ttfx_geometry_t ttfx_geometry_for_view(unsigned int width, unsigned int height);
+bool ttfx_display_swap_offset(unsigned int old_width, unsigned int old_height, unsigned int old_grid_y,
+                              unsigned int new_width, unsigned int new_height, unsigned int new_grid_y,
+                              int *offset);
+int ttfx_glide_offset(int from, unsigned int tick, unsigned int total);
+/* Copies a width x height frame into `destination` (rows `stride` bytes apart,
+ * height + top rows tall) bottom-aligned under `top` rows filled with `fill`.
+ * Only the first width pixels of each destination row are written. Returns
+ * false, writing nothing, for a null buffer, an empty frame or a stride
+ * shorter than one frame row. */
+bool ttfx_compose_bottom_aligned(void *destination, size_t stride,
+                                 const uint32_t *frame, uint32_t width, uint32_t height,
+                                 uint32_t top, uint32_t fill);
 unsigned int ttfx_geometry_x_edge(const ttfx_geometry_t *geometry, unsigned int column);
+
+/* Firmware hold: while only firmware framebuffers drive the panel (on Apple
+ * Silicon the device-tree simple-framebuffer, replaced by the native display
+ * driver a few seconds into boot) the splash shows a static mark and starts
+ * the animation once a native display is added, or after this deadline. */
+#define TTFX_FIRMWARE_HOLD_NS UINT64_C(8000000000)
+#define TTFX_FIRMWARE_MARK_LOGICAL_SIZE 128L
+#define TTFX_FIRMWARE_DRIVER_NAME "simple-framebuffer"
+#define TTFX_DEVICETREE_FRAMEBUFFER_PREFIX "framebuffer@"
+
+typedef enum {
+        TTFX_FIRMWARE_HOLD_AUTO,
+        TTFX_FIRMWARE_HOLD_ON,
+        TTFX_FIRMWARE_HOLD_OFF
+} ttfx_firmware_hold_mode_t;
+
+/* "true", "false" or "auto"; anything else, including NULL, is auto. */
+ttfx_firmware_hold_mode_t ttfx_firmware_hold_mode_parse(const char *value);
+/* True when `chosen_path` has an entry named framebuffer@<anything>. */
+bool ttfx_devicetree_has_framebuffer(const char *chosen_path);
+/* Auto enables the hold only when the device tree declares a framebuffer. */
+bool ttfx_firmware_hold_resolve(ttfx_firmware_hold_mode_t mode, const char *chosen_path);
+/* Notched Apple panels: m1n1 draws its boot logo centred on the whole panel,
+ * then hands the OS (and U-Boot, so Limine too) a framebuffer that starts
+ * below the notch, recording the notch height as apple,notch-height on the
+ * DCP node. The rows hidden above the device-tree framebuffer in
+ * `chosen_path`, read from the first dcp@* node under `soc_path` that has the
+ * property; 0 when either is missing or unreadable, or when the framebuffer
+ * still covers the notch (m1n1's asahi,show-notch=1, detected like m1n1
+ * does: the height is not an exact 16:N of the width). */
+uint32_t ttfx_devicetree_hidden_notch(const char *chosen_path, const char *soc_path);
+/* How far, in logical pixels, a mark centred on the hidden-notch framebuffer
+ * moves up to sit where m1n1's logo sat: half the notch, rounded to nearest
+ * at `scale` (clamped to 1). */
+long ttfx_firmware_mark_lift(uint32_t hidden_notch, int scale);
+/* True when `device_name` is /dev/dri/card<digits> and
+ * <sysfs_drm_root>/card<digits>/device/driver links to a driver directory
+ * named simple-framebuffer. Anything else, including unreadable links, is
+ * not a firmware display. */
+bool ttfx_firmware_display(const char *device_name, const char *sysfs_drm_root);
+
+/* Reverse outro: right before the handover to the desktop the effect plays
+ * backwards until only the plain background is left, so the compositor starts
+ * on the same colour. [ttfx] Outro=reverse|none selects it (absent or any
+ * other value: reverse); OutroMs is its wall-clock budget in milliseconds
+ * (absent or not a decimal number: 700; clamped to 100..1500, well inside
+ * the 3 s `plymouth deactivate` timeout). */
+#define TTFX_OUTRO_DEFAULT_MS 700U
+#define TTFX_OUTRO_MIN_MS 100U
+#define TTFX_OUTRO_MAX_MS 1500U
+#define TTFX_OUTRO_TICKS_PER_SECOND 240U
+/* True (reverse) unless the value is exactly "none". */
+bool ttfx_outro_mode_parse(const char *value);
+unsigned int ttfx_outro_ms_parse(const char *value);
+/* Engine draw calls that fit the budget at one call per 240 Hz tick. */
+uint32_t ttfx_outro_max_calls(unsigned int ms);
+/* Draw calls to make now so that `done` of `calls` keeps pace with the
+ * elapsed time: at least one per tick, all remaining ones once the budget
+ * is spent, 0 when done. */
+uint32_t ttfx_outro_due_calls(uint64_t elapsed_ns, unsigned int ms, uint32_t calls, uint32_t done);
 
 
 #endif

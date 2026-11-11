@@ -49,14 +49,21 @@ enum {
   TTFX_STATUS_ENGINE_ERROR = 7,
   TTFX_STATUS_PANIC = 8,
   TTFX_STATUS_INPUT_TOO_LARGE = 9,
-  TTFX_STATUS_POISONED = 10
+  TTFX_STATUS_POISONED = 10,
+  /* begin_reverse: no usable recorded history (never enabled or dropped). */
+  TTFX_STATUS_UNAVAILABLE = 11,
+  /* The call does not apply to the current playback (forward vs reverse). */
+  TTFX_STATUS_INVALID_STATE = 12
 };
 
 enum {
   /* Plays the animation endlessly, seamlessly restarting at the end. */
   TTFX_LOGO_MODE_LOOP = 0,
   /* Plays the animation exactly once, then holds the final frame. */
-  TTFX_LOGO_MODE_ONE_TIME = 1
+  TTFX_LOGO_MODE_ONE_TIME = 1,
+  /* Plays the recorded playback backwards after ttfx_engine_begin_reverse,
+   * ending on the blank canvas. */
+  TTFX_LOGO_MODE_REVERSE = 2
 };
 
 enum {
@@ -65,7 +72,9 @@ enum {
   TTFX_MAX_WIDTH = 162,
   TTFX_MAX_HEIGHT = 40,
   TTFX_MAX_CELLS = 4800,
-  TTFX_MAX_FPS = 240
+  TTFX_MAX_FPS = 240,
+  TTFX_MAX_HISTORY_FRAMES = 4096,
+  TTFX_MAX_REVERSE_CALLS = 100000
 };
 
 /*
@@ -101,6 +110,35 @@ int32_t ttfx_engine_step(TtfxEngine *engine, uint8_t *out_looped);
 int32_t ttfx_engine_reset(TtfxEngine *engine);
 
 /*
+ * Starts (max_frames 2..TTFX_MAX_HISTORY_FRAMES) or stops (max_frames 0)
+ * recording the forward playback so it can later be played backwards. The
+ * current frame is recorded first; every reset or loop restart begins a new
+ * record. Recording only reads exposed frames: forward playback stays
+ * byte-identical. max_bytes must hold at least one uncompressed frame
+ * (width * height * sizeof(TtfxCell)); past max_frames or max_bytes every
+ * other keyframe is dropped, so the record keeps spanning the whole cycle.
+ * A later allocation failure silently drops the record; begin_reverse then
+ * returns TTFX_STATUS_UNAVAILABLE. Not valid during a reverse playback.
+ */
+int32_t ttfx_engine_record_history(TtfxEngine *engine, uint32_t max_frames,
+                                   size_t max_bytes);
+
+/*
+ * Prepares a reverse playback for TTFX_LOGO_MODE_REVERSE draws: from the
+ * exposed frame back to the first recorded frame of the current cycle, at no
+ * less than frames_per_call recorded frames per draw (faster when it would not
+ * fit), then a dissolve of whatever that first frame still shows, and the
+ * blank canvas (every cell U+0020 without flags) on the last draw.
+ * *out_calls receives the exact number of draws, 1..max_calls
+ * (max_calls <= TTFX_MAX_REVERSE_CALLS). It does not change the exposed
+ * frame. TTFX_STATUS_UNAVAILABLE leaves the engine unchanged. Forward draws
+ * and ttfx_engine_step return TTFX_STATUS_INVALID_STATE until
+ * ttfx_engine_reset ends the reverse playback.
+ */
+int32_t ttfx_engine_begin_reverse(TtfxEngine *engine, uint32_t max_calls,
+                                  uint32_t frames_per_call, uint32_t *out_calls);
+
+/*
  * Draws the logo according to mode (TTFX_LOGO_MODE_*). Every caller keeps its
  * playback state exclusively through this function; the current frame is
  * always available through ttfx_engine_cells after the call.
@@ -108,7 +146,9 @@ int32_t ttfx_engine_reset(TtfxEngine *engine);
  * out_looped (may be NULL) is set to 1 only for the call in which a
  * TTFX_LOGO_MODE_LOOP playback wrapped to a fresh cycle. out_finished (may be
  * NULL) is set to 1 once a TTFX_LOGO_MODE_ONE_TIME playback has completed and
- * the final frame is being held; it stays 1 on later calls.
+ * the final frame is being held, or once a TTFX_LOGO_MODE_REVERSE playback
+ * exposes the blank canvas; it stays 1 on later calls. REVERSE without a
+ * prepared reverse playback returns TTFX_STATUS_INVALID_STATE.
  */
 int32_t ttfx_engine_draw_logo(TtfxEngine *engine, uint32_t mode,
                               uint8_t *out_looped, uint8_t *out_finished);

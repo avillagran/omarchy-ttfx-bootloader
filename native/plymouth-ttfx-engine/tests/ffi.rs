@@ -2,9 +2,11 @@ use std::ffi::CString;
 use std::ptr;
 
 use ttfx_plymouth::{
-    ttfx_engine_cells, ttfx_engine_create, ttfx_engine_free, ttfx_engine_reset, ttfx_engine_step,
-    Cell, TtfxEngine, TTFX_STATUS_INPUT_TOO_LARGE, TTFX_STATUS_INVALID_ARGUMENT,
-    TTFX_STATUS_INVALID_EFFECT, TTFX_STATUS_INVALID_UTF8, TTFX_STATUS_OK,
+    ttfx_engine_begin_reverse, ttfx_engine_cells, ttfx_engine_create, ttfx_engine_draw_logo,
+    ttfx_engine_free, ttfx_engine_record_history, ttfx_engine_reset, ttfx_engine_step, Cell,
+    TtfxEngine, TTFX_STATUS_INPUT_TOO_LARGE, TTFX_STATUS_INVALID_ARGUMENT,
+    TTFX_STATUS_INVALID_EFFECT, TTFX_STATUS_INVALID_STATE, TTFX_STATUS_INVALID_UTF8,
+    TTFX_STATUS_OK, TTFX_STATUS_UNAVAILABLE,
 };
 
 #[test]
@@ -216,4 +218,90 @@ fn c_abi_rejects_oversized_input_before_reading_or_allocating_it() {
         TTFX_STATUS_INPUT_TOO_LARGE
     );
     assert!(handle.is_null());
+}
+
+#[test]
+fn c_abi_records_history_and_plays_the_reverse_to_the_blank_canvas() {
+    let effect = CString::new("decrypt").unwrap();
+    let input = include_bytes!("../../plymouth-ttfx-plugin/embedded-logo-v2.txt");
+    let mut handle: *mut TtfxEngine = ptr::null_mut();
+    assert_eq!(
+        unsafe {
+            ttfx_engine_create(
+                effect.as_ptr(),
+                22321466108495961,
+                input.as_ptr(),
+                input.len(),
+                162,
+                20,
+                240,
+                &mut handle,
+            )
+        },
+        TTFX_STATUS_OK
+    );
+    let mut calls = 7u32;
+    assert_eq!(
+        unsafe { ttfx_engine_begin_reverse(handle, 168, 2, &mut calls) },
+        TTFX_STATUS_UNAVAILABLE
+    );
+    assert_eq!(calls, 0);
+    assert_eq!(
+        unsafe { ttfx_engine_begin_reverse(handle, 168, 2, ptr::null_mut()) },
+        TTFX_STATUS_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { ttfx_engine_record_history(ptr::null_mut(), 128, 4 << 20) },
+        TTFX_STATUS_INVALID_ARGUMENT
+    );
+    assert_eq!(
+        unsafe { ttfx_engine_record_history(handle, 128, 4 << 20) },
+        TTFX_STATUS_OK
+    );
+    for _ in 0..400 {
+        let mut finished = 0u8;
+        assert_eq!(
+            unsafe { ttfx_engine_draw_logo(handle, 1, ptr::null_mut(), &mut finished) },
+            TTFX_STATUS_OK
+        );
+        assert_eq!(finished, 0);
+    }
+    assert_eq!(
+        unsafe { ttfx_engine_begin_reverse(handle, 168, 2, &mut calls) },
+        TTFX_STATUS_OK
+    );
+    assert!((2..=168).contains(&calls));
+    assert_eq!(
+        unsafe { ttfx_engine_draw_logo(handle, 1, ptr::null_mut(), ptr::null_mut()) },
+        TTFX_STATUS_INVALID_STATE
+    );
+    for call in 1..=calls {
+        let mut looped = 9u8;
+        let mut finished = 9u8;
+        assert_eq!(
+            unsafe { ttfx_engine_draw_logo(handle, 2, &mut looped, &mut finished) },
+            TTFX_STATUS_OK
+        );
+        assert_eq!(looped, 0);
+        assert_eq!(finished, u8::from(call == calls), "call {call} of {calls}");
+    }
+    let mut cells: *const Cell = ptr::null();
+    let mut count = 0usize;
+    let mut width = 0u32;
+    let mut height = 0u32;
+    assert_eq!(
+        unsafe { ttfx_engine_cells(handle, &mut cells, &mut count, &mut width, &mut height) },
+        TTFX_STATUS_OK
+    );
+    let cells = unsafe { std::slice::from_raw_parts(cells, count) };
+    assert!(cells
+        .iter()
+        .all(|cell| cell.codepoint == 0x20 && cell.flags == 0 && cell.fg_rgba == 0 && cell.bg_rgba == 0));
+    assert_eq!(unsafe { ttfx_engine_reset(handle) }, TTFX_STATUS_OK);
+    let mut finished = 9u8;
+    assert_eq!(
+        unsafe { ttfx_engine_draw_logo(handle, 1, ptr::null_mut(), &mut finished) },
+        TTFX_STATUS_OK
+    );
+    unsafe { ttfx_engine_free(handle) };
 }

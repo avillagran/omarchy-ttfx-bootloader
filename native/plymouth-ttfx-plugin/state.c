@@ -2,8 +2,10 @@
 #define _GNU_SOURCE
 #endif
 #include "state.h"
+#include <dirent.h>
 #include <fcntl.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/vfs.h>
@@ -39,7 +41,7 @@ bool ttfx_raw_publish(int directory, const uint32_t *pixels, uint32_t width,
                       uint32_t height, uint64_t captured_ns)
 {
         uint8_t header[48] = {0};
-        uint8_t row[TTFX_RAW_MAX_WIDTH * 4U];
+        uint8_t row[TTFX_RAW_SCRATCH_PIXELS * 4U];
         int file = -1;
         bool created = false;
         uint64_t now = ttfx_boottime_ns();
@@ -64,12 +66,20 @@ bool ttfx_raw_publish(int directory, const uint32_t *pixels, uint32_t width,
         if (write(file, header, sizeof(header)) != (ssize_t)sizeof(header))
                 goto fail;
         /* Packed native Plymouth ARGB words -> explicit little-endian BGRX.
-         * At most 2160 writes, no retry/sync/sleep and only 16 KiB scratch. */
+         * One write per row chunk of at most TTFX_RAW_SCRATCH_PIXELS: a single
+         * write per row up to 4096 pixels wide, two at the 8192 bound (at most
+         * 16384 writes). No retry/sync/sleep and only 16 KiB scratch. */
         for (uint32_t y = 0; y < height; y++) {
-                for (uint32_t x = 0; x < width; x++)
-                        put_little(row + x * 4U, pixels[(size_t)y * width + x] & 0xffffffU, 4);
-                if (write(file, row, width * 4U) != (ssize_t)(width * 4U))
-                        goto fail;
+                const uint32_t *source = pixels + (size_t)y * width;
+                for (uint32_t x = 0; x < width; x += TTFX_RAW_SCRATCH_PIXELS) {
+                        uint32_t count = width - x < TTFX_RAW_SCRATCH_PIXELS
+                                                 ? width - x
+                                                 : TTFX_RAW_SCRATCH_PIXELS;
+                        for (uint32_t i = 0; i < count; i++)
+                                put_little(row + i * 4U, source[x + i] & 0xffffffU, 4);
+                        if (write(file, row, count * 4U) != (ssize_t)(count * 4U))
+                                goto fail;
+                }
         }
         if (fchmod(file, 0644) != 0)
                 goto fail;
@@ -573,6 +583,64 @@ unsigned int ttfx_geometry_x_edge(const ttfx_geometry_t *geometry, unsigned int 
         return (unsigned int)((uint64_t)column * geometry->cell_height * 51U / 100U);
 }
 
+/* Bottom-aligned mapping of the old display's grid row onto the new display:
+ * the logical offset from the new grid row that keeps the splash where it was.
+ * Only for a same-width display whose height differs by at most an eighth. */
+bool ttfx_display_swap_offset(unsigned int old_width, unsigned int old_height, unsigned int old_grid_y,
+                              unsigned int new_width, unsigned int new_height, unsigned int new_grid_y,
+                              int *offset)
+{
+        unsigned int difference;
+        int64_t from;
+
+        if (offset == NULL || old_width == 0U || old_width != new_width || old_height == new_height)
+                return false;
+        difference = old_height > new_height ? old_height - new_height : new_height - old_height;
+        if (difference > new_height / 8U)
+                return false;
+        from = (int64_t)old_grid_y + (int64_t)new_height - (int64_t)old_height - (int64_t)new_grid_y;
+        if (from == 0 || from > (int64_t)new_height || from < -(int64_t)new_height)
+                return false;
+        *offset = (int)from;
+        return true;
+}
+
+/* Ease-out cubic glide from `from` to 0: the remaining offset after `tick` of
+ * `total` ticks is from * (1 - t)^3, truncated toward zero, 0 from the end on. */
+int ttfx_glide_offset(int from, unsigned int tick, unsigned int total)
+{
+        int64_t remaining;
+
+        if (total == 0U || tick >= total)
+                return 0;
+        remaining = (int64_t)(total - tick);
+        return (int)(((int64_t)from * remaining * remaining * remaining) /
+                     ((int64_t)total * total * total));
+}
+
+bool ttfx_compose_bottom_aligned(void *destination, size_t stride,
+                                 const uint32_t *frame, uint32_t width, uint32_t height,
+                                 uint32_t top, uint32_t fill)
+{
+        size_t row_bytes;
+        char *base = destination;
+
+        if (destination == NULL || frame == NULL || width == 0U || height == 0U)
+                return false;
+        row_bytes = (size_t)width * sizeof(uint32_t);
+        if (stride < row_bytes)
+                return false;
+        for (uint32_t row = 0U; row < top; row++) {
+                uint32_t *line = (uint32_t *)(void *)(base + (size_t)row * stride);
+                for (uint32_t x = 0U; x < width; x++)
+                        line[x] = fill;
+        }
+        for (uint32_t row = 0U; row < height; row++)
+                memcpy(base + ((size_t)top + row) * stride,
+                       frame + (size_t)row * width, row_bytes);
+        return true;
+}
+
 ttfx_geometry_t ttfx_geometry_for_view(unsigned int width, unsigned int height)
 {
         ttfx_geometry_t geometry;
@@ -597,3 +665,198 @@ ttfx_geometry_t ttfx_geometry_for_view(unsigned int width, unsigned int height)
 }
 
 
+
+ttfx_firmware_hold_mode_t ttfx_firmware_hold_mode_parse(const char *value)
+{
+        if (value != NULL && strcmp(value, "true") == 0)
+                return TTFX_FIRMWARE_HOLD_ON;
+        if (value != NULL && strcmp(value, "false") == 0)
+                return TTFX_FIRMWARE_HOLD_OFF;
+        return TTFX_FIRMWARE_HOLD_AUTO;
+}
+
+bool ttfx_devicetree_has_framebuffer(const char *chosen_path)
+{
+        static const char prefix[] = TTFX_DEVICETREE_FRAMEBUFFER_PREFIX;
+        struct dirent *entry;
+        bool found = false;
+        DIR *directory;
+
+        if (chosen_path == NULL || chosen_path[0] == '\0')
+                return false;
+        directory = opendir(chosen_path);
+        if (directory == NULL)
+                return false;
+        while (!found && (entry = readdir(directory)) != NULL)
+                found = strncmp(entry->d_name, prefix, sizeof(prefix) - 1U) == 0;
+        closedir(directory);
+        return found;
+}
+
+bool ttfx_firmware_hold_resolve(ttfx_firmware_hold_mode_t mode, const char *chosen_path)
+{
+        if (mode == TTFX_FIRMWARE_HOLD_ON)
+                return true;
+        if (mode == TTFX_FIRMWARE_HOLD_OFF)
+                return false;
+        return ttfx_devicetree_has_framebuffer(chosen_path);
+}
+
+/* One big-endian u32 device-tree property; false unless it is exactly 4 bytes. */
+static bool devicetree_read_u32(const char *directory, const char *name, uint32_t *value)
+{
+        char path[PATH_MAX];
+        unsigned char bytes[5];
+        ssize_t length;
+        int fd;
+        int written = snprintf(path, sizeof(path), "%s/%s", directory, name);
+
+        if (written < 0 || (size_t)written >= sizeof(path))
+                return false;
+        fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0)
+                return false;
+        length = read(fd, bytes, sizeof(bytes));
+        close(fd);
+        if (length != 4)
+                return false;
+        *value = (uint32_t)bytes[0] << 24 | (uint32_t)bytes[1] << 16 | (uint32_t)bytes[2] << 8 |
+                 (uint32_t)bytes[3];
+        return true;
+}
+
+/* The first entry of `directory` starting with `prefix` for which `name`
+ * reads as a u32. */
+static bool devicetree_find_u32(const char *directory, const char *prefix, const char *name,
+                                uint32_t *value)
+{
+        char path[PATH_MAX];
+        struct dirent *entry;
+        bool found = false;
+        DIR *handle = opendir(directory);
+
+        if (handle == NULL)
+                return false;
+        while (!found && (entry = readdir(handle)) != NULL) {
+                int written;
+
+                if (strncmp(entry->d_name, prefix, strlen(prefix)) != 0)
+                        continue;
+                written = snprintf(path, sizeof(path), "%s/%s", directory, entry->d_name);
+                if (written < 0 || (size_t)written >= sizeof(path))
+                        continue;
+                found = devicetree_read_u32(path, name, value);
+        }
+        closedir(handle);
+        return found;
+}
+
+uint32_t ttfx_devicetree_hidden_notch(const char *chosen_path, const char *soc_path)
+{
+        uint32_t width = 0U;
+        uint32_t height = 0U;
+        uint32_t notch = 0U;
+        uint64_t sixteenths;
+
+        if (chosen_path == NULL || chosen_path[0] == '\0' || soc_path == NULL || soc_path[0] == '\0')
+                return 0U;
+        if (!devicetree_find_u32(chosen_path, TTFX_DEVICETREE_FRAMEBUFFER_PREFIX, "width", &width) ||
+            !devicetree_find_u32(chosen_path, TTFX_DEVICETREE_FRAMEBUFFER_PREFIX, "height", &height) ||
+            !devicetree_find_u32(soc_path, "dcp@", "apple,notch-height", &notch))
+                return 0U;
+        if (width == 0U || height == 0U || notch == 0U || notch >= height)
+                return 0U;
+        sixteenths = (uint64_t)height * 16U / width;
+        if ((uint64_t)width * sixteenths / 16U != height)
+                return 0U;
+        return notch;
+}
+
+long ttfx_firmware_mark_lift(uint32_t hidden_notch, int scale)
+{
+        if (scale < 1)
+                scale = 1;
+        return ((long)hidden_notch + (long)scale) / (2L * (long)scale);
+}
+
+bool ttfx_firmware_display(const char *device_name, const char *sysfs_drm_root)
+{
+        static const char prefix[] = "/dev/dri/card";
+        char path[PATH_MAX];
+        char target[PATH_MAX];
+        const char *digits;
+        const char *base;
+        size_t count = 0U;
+        ssize_t length;
+        int written;
+
+        if (device_name == NULL || sysfs_drm_root == NULL || sysfs_drm_root[0] == '\0' ||
+            strncmp(device_name, prefix, sizeof(prefix) - 1U) != 0)
+                return false;
+        digits = device_name + sizeof(prefix) - 1U;
+        while (digits[count] >= '0' && digits[count] <= '9')
+                count++;
+        if (count == 0U || count > 4U || digits[count] != '\0')
+                return false;
+        written = snprintf(path, sizeof(path), "%s/card%s/device/driver", sysfs_drm_root, digits);
+        if (written < 0 || (size_t)written >= sizeof(path))
+                return false;
+        length = readlink(path, target, sizeof(target) - 1U);
+        if (length <= 0)
+                return false;
+        target[length] = '\0';
+        while (length > 1 && target[length - 1] == '/')
+                target[--length] = '\0';
+        base = strrchr(target, '/');
+        base = base != NULL ? base + 1 : target;
+        return strcmp(base, TTFX_FIRMWARE_DRIVER_NAME) == 0;
+}
+
+bool ttfx_outro_mode_parse(const char *value)
+{
+        return value == NULL || strcmp(value, "none") != 0;
+}
+
+unsigned int ttfx_outro_ms_parse(const char *value)
+{
+        unsigned int parsed = 0U;
+        size_t index = 0U;
+
+        if (value == NULL || value[0] == '\0')
+                return TTFX_OUTRO_DEFAULT_MS;
+        while (value[index] != '\0') {
+                if (index >= 9U || value[index] < '0' || value[index] > '9')
+                        return TTFX_OUTRO_DEFAULT_MS;
+                parsed = parsed * 10U + (unsigned int)(value[index] - '0');
+                index++;
+        }
+        if (parsed < TTFX_OUTRO_MIN_MS)
+                return TTFX_OUTRO_MIN_MS;
+        if (parsed > TTFX_OUTRO_MAX_MS)
+                return TTFX_OUTRO_MAX_MS;
+        return parsed;
+}
+
+uint32_t ttfx_outro_max_calls(unsigned int ms)
+{
+        uint32_t calls = (uint32_t)((uint64_t)ms * TTFX_OUTRO_TICKS_PER_SECOND / 1000U);
+
+        return calls > 0U ? calls : 1U;
+}
+
+uint32_t ttfx_outro_due_calls(uint64_t elapsed_ns, unsigned int ms, uint32_t calls, uint32_t done)
+{
+        uint64_t budget_ns = (uint64_t)ms * UINT64_C(1000000);
+        uint64_t target;
+
+        if (done >= calls)
+                return 0U;
+        if (budget_ns == 0U || elapsed_ns >= budget_ns)
+                return calls - done;
+        target = elapsed_ns * calls / budget_ns;
+        if (target < (uint64_t)done + 1U)
+                target = (uint64_t)done + 1U;
+        if (target > calls)
+                target = calls;
+        return (uint32_t)(target - done);
+}

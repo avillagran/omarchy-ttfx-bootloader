@@ -32,6 +32,11 @@ require_literal "ttfx_engine_create" "$plugin"
 require_literal "ttfx_engine_draw_logo" "$plugin"
 require_literal "ttfx_engine_cells" "$plugin"
 require_literal "ttfx_engine_free" "$plugin"
+require_literal "ttfx_engine_record_history" "$plugin"
+require_literal "ttfx_engine_begin_reverse" "$plugin"
+require_literal "TTFX_LOGO_MODE_REVERSE" "$plugin"
+require_literal '"Outro"' "$plugin"
+require_literal '"OutroMs"' "$plugin"
 require_literal '"decrypt"' "$plugin"
 require_literal '#define FRAME_INTERVAL_SECONDS (1.0 / 240.0)' "$plugin"
 require_literal '#define ENGINE_STEPS_PER_TICK 2U' "$plugin"
@@ -76,7 +81,14 @@ def body(name):
 
 if "ttfx_engine_step" in body("on_draw") or "ttfx_engine_draw_logo" in body("on_draw") or "ttfx_engine_cells" in body("on_draw"):
     raise SystemExit("FAIL: simulation must not advance from draw callback")
+for name in ("on_draw", "become_idle", "start_outro"):
+    if "TTFX_LOGO_MODE_REVERSE" in body(name) or "ttfx_engine_draw_logo" in body(name):
+        raise SystemExit(f"FAIL: the outro must advance from the timeout, not from {name}")
+if "ttfx_engine_begin_reverse" in body("on_draw"):
+    raise SystemExit("FAIL: draw must not start the outro")
 timeout = body("on_timeout")
+if "TTFX_LOGO_MODE_REVERSE" not in timeout or "outro_due_calls" not in timeout:
+    raise SystemExit("FAIL: the outro must be driven, paced, from the timeout")
 if timeout.count("ttfx_engine_draw_logo") != 1:
     raise SystemExit("FAIL: timeout must draw the logo through the single engine entry point")
 if timeout.count("update_snapshot") != 1:

@@ -12,10 +12,11 @@ typedef struct ply_label ply_label_t;
 typedef struct _ply_image ply_image_t;
 typedef struct ply_key_file ply_key_file_t;
 typedef struct ply_buffer ply_buffer_t;
+typedef struct ply_renderer ply_renderer_t;
 typedef struct { unsigned int pulls; } ply_trigger_t;
 void ply_trigger_pull(ply_trigger_t *, void *);
 typedef int ply_boot_splash_mode_t;
-enum { PLY_BOOT_SPLASH_MODE_BOOT_UP = 0 };
+enum { PLY_BOOT_SPLASH_MODE_BOOT_UP = 0, PLY_BOOT_SPLASH_MODE_SHUTDOWN = 1 };
 typedef struct _ply_boot_splash_plugin ply_boot_splash_plugin_t;
 
 typedef struct {
@@ -59,8 +60,11 @@ unsigned long ply_pixel_display_get_width(ply_pixel_display_t *);
 unsigned long ply_pixel_display_get_height(ply_pixel_display_t *);
 void ply_pixel_display_set_draw_handler(ply_pixel_display_t *, ply_pixel_display_draw_handler_t, void *);
 void ply_pixel_display_draw_area(ply_pixel_display_t *, int, int, int, int);
+ply_renderer_t *ply_pixel_display_get_renderer(ply_pixel_display_t *);
+const char *ply_renderer_get_device_name(ply_renderer_t *);
 typedef enum { PLY_PIXEL_BUFFER_ROTATE_UPRIGHT = 0 } ply_pixel_buffer_rotation_t;
 int ply_pixel_buffer_get_device_scale(ply_pixel_buffer_t *);
+void ply_pixel_buffer_set_device_scale(ply_pixel_buffer_t *, int);
 ply_pixel_buffer_rotation_t ply_pixel_buffer_get_device_rotation(ply_pixel_buffer_t *);
 unsigned long ply_pixel_buffer_get_width(ply_pixel_buffer_t *);
 unsigned long ply_pixel_buffer_get_height(ply_pixel_buffer_t *);

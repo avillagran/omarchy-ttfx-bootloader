@@ -48,9 +48,9 @@ int main(void)
         for (size_t i = 0; i < 1280 * 720; i++)
                 assert(little(raw + 48 + i * 4, 4) == (pixels[i] & 0xffffff));
         free(raw);
-        assert(!ttfx_raw_publish(dir, pixels, 4097, 720, stamp));
+        assert(!ttfx_raw_publish(dir, pixels, TTFX_RAW_MAX_WIDTH + 1U, 720, stamp));
         assert(faccessat(dir, TTFX_RAW_NAME, F_OK, 0) != 0);
-        assert(!ttfx_raw_publish(dir, pixels, 1280, 2161, stamp));
+        assert(!ttfx_raw_publish(dir, pixels, 1280, TTFX_RAW_MAX_HEIGHT + 1U, stamp));
         assert(!ttfx_raw_publish(dir, pixels, 1280, 720, UINT64_MAX));
         assert(!ttfx_raw_publish(dir, pixels, 1280, 720, 0));
         assert(symlinkat("missing-target", dir, TTFX_RAW_TEMP) == 0);
@@ -62,5 +62,37 @@ int main(void)
         ply_pixel_buffer_free(buffer);
         close(dir);
         assert(rmdir(directory) == 0);
+
+        /* Firmware-hold mark: a source tagged with the canvas's device scale
+         * is composited 1:1 in physical pixels at a logical offset, and its
+         * alpha blends over the background. */
+        ply_pixel_buffer_t *canvas = ply_pixel_buffer_new(400, 400);
+        ply_pixel_buffer_t *mark_buffer = ply_pixel_buffer_new(TTFX_FIRMWARE_MARK_LOGICAL_SIZE * 2,
+                                                               TTFX_FIRMWARE_MARK_LOGICAL_SIZE * 2);
+        assert(canvas && mark_buffer);
+        ply_pixel_buffer_set_device_scale(canvas, 2);
+        ply_pixel_buffer_set_device_scale(mark_buffer, 2);
+        assert(ply_pixel_buffer_get_width(canvas) == 200 && ply_pixel_buffer_get_width(mark_buffer) == 128);
+        ply_rectangle_t logical = {.width = 200, .height = 200};
+        ply_pixel_buffer_fill_with_hex_color(canvas, &logical, 0x0b0d10);
+        uint32_t *mark_pixels = ply_pixel_buffer_get_argb32_data(mark_buffer);
+        for (size_t i = 0; i < 256 * 256; i++)
+                mark_pixels[i] = 0xffff0000U;
+        mark_pixels[0] = 0x00000000U;
+        mark_pixels[1] = 0x80800000U; /* premultiplied half-transparent red */
+        ply_pixel_buffer_fill_with_buffer(canvas, mark_buffer, (200 - 128) / 2, (200 - 128) / 2);
+        uint32_t *canvas_pixels = ply_pixel_buffer_get_argb32_data(canvas);
+        assert((canvas_pixels[72 * 400 + 72] & 0xffffff) == 0x0b0d10);
+        assert((canvas_pixels[72 * 400 + 73] & 0xff0000) >= 0x800000 &&
+               (canvas_pixels[72 * 400 + 73] & 0xff0000) <= 0x870000);
+        assert((canvas_pixels[72 * 400 + 74] & 0xffffff) == 0xff0000);
+        assert((canvas_pixels[327 * 400 + 327] & 0xffffff) == 0xff0000);
+        assert((canvas_pixels[71 * 400 + 200] & 0xffffff) == 0x0b0d10);
+        assert((canvas_pixels[328 * 400 + 200] & 0xffffff) == 0x0b0d10);
+        assert((canvas_pixels[200 * 400 + 71] & 0xffffff) == 0x0b0d10);
+        assert((canvas_pixels[200 * 400 + 328] & 0xffffff) == 0x0b0d10);
+        ply_pixel_buffer_free(mark_buffer);
+        ply_pixel_buffer_free(canvas);
+        puts("real Plymouth HiDPI mark composite: PASS (256x256 at scale 2, 1:1 with alpha)");
         puts("real Plymouth pixelbuffer -> OMBFRAW1 full-frame readback: PASS (1280x720, every pixel)");
 }
