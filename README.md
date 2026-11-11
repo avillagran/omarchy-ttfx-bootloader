@@ -5,6 +5,20 @@ Native TTFX animation for Omarchy's Plymouth boot and LUKS unlock screen, for Om
 The boot integration targets Omarchy quattro (base `6194f4606`) with the
 TTFX 0.5.1 engine.
 
+![Boot preview: Limine, the TTFX Decrypt unlock screen, a wrong password, the unlock and the reverse outro](docs/screenshots/boot-preview.gif)
+
+[Full boot video](https://github.com/avillagran/omarchy-ttfx-bootloader/releases/download/plymouth-ttfx-26.134.222-r2/omarchy-ttfx-boot-qemu.mp4) (Omarchy 4.5 in QEMU, wrong password included).
+
+| Limine during its timeout | Limine menu after a key press |
+|---|---|
+| ![Limine quiet timeout with the Omarchy mark and the boot options hint](docs/screenshots/limine-quiet.png) | ![Limine menu with the mark above the entries](docs/screenshots/limine-menu.png) |
+| **Unlock prompt (Decrypt)** | **Wrong password** |
+| ![Decrypt animation with the LUKS prompt](docs/screenshots/boot-decrypt.png) | ![Wrong password reaction](docs/screenshots/boot-wrong-password.png) |
+| **Unlocked** | **Reverse outro into the desktop background** |
+| ![Logo resolved after unlock](docs/screenshots/boot-unlock.png) | ![Reverse outro](docs/screenshots/boot-outro.png) |
+
+The two Limine screens need a Limine built with [`patches/limine-quiet-wallpaper.patch`](patches/limine-quiet-wallpaper.patch); a stock Limine shows nothing during the timeout and the themed menu after a key press.
+
 ## Install
 
 ```bash
