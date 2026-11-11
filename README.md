@@ -23,6 +23,11 @@ The installer downloads a pinned source archive and checks its sha256. It then:
 - by default, downloads the prebuilt module for the machine's architecture from the GitHub release named in `prebuilt/manifest`, and checks it against the sha256 pinned there. `--build` compiles it instead from vendored TTFX 0.5.1;
 - activates the `omarchy` theme;
 - rebuilds the UKI or initramfs and checks that the new image carries the module.
+- themes the bootloader (Limine or GRUB) with the same Omarchy mark Plymouth shows, so the picture stays put from the bootloader to the unlock screen.
+
+When the splash ends, the logo animation plays backwards until only the background is left, the colour the desktop starts on, so there is no black blink between Plymouth and Hyprland. On Apple Silicon a static mark covers the seconds before the native display driver takes over, placed where m1n1 draws its logo.
+
+Omarchy boots Limine with `quiet: yes`, which draws nothing during its one-second timeout. The installer adds `quiet_wallpaper` to `/boot/limine.conf`; a Limine built with [`patches/limine-quiet-wallpaper.patch`](patches/limine-quiet-wallpaper.patch) then shows the mark and "Press any key for boot options" during the timeout, and raises the mark above the entries when the menu opens. A stock Limine ignores the key. The patched package is proposed to Omarchy in omacom/omarchy-pkgs.
 
 The prebuilt modules target exactly the Plymouth ABI the build supports (`26.134.222`, the same on Arch x86_64 and Arch Linux ARM). On any other Plymouth version the default mode stops before changing anything and asks for `--build`.
 
