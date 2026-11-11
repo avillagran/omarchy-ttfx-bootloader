@@ -54,7 +54,7 @@ if grep -F -- '--force-enable' "$root/scripts/install.sh" >/dev/null; then
 fi
 grep -F 'legacy Off state all normalize' "$root/bin/omarchy-plymouth-ttfx-install" >/dev/null || fail "legacy Off does not normalize to Decrypt"
 grep -F 'chmod 0644 "$module_stage"' "$root/bin/omarchy-plymouth-ttfx-install" >/dev/null && fail "installer makes Plymouth module non-executable"
-grep -F "printf '[Daemon]\\n'" "$root/bin/omarchy-plymouth-ttfx-install" >/dev/null || fail "empty Plymouth configuration is not repaired"
+grep -F "printf '[Daemon]\\nTheme=%s\\n'" "$root/bin/omarchy-plymouth-ttfx-install" >/dev/null || fail "empty Plymouth configuration is not repaired"
 pass "installer covers Omarchy runtime paths and Plymouth 26 edge cases"
 
 python3 - "$root/default/omarchy/ttfx-menu.jsonc" <<'PY'

@@ -48,8 +48,10 @@ previous_theme=$(<"$state_dir/previous-theme")
 [[ -n $previous_theme ]] || { echo "Missing previous Plymouth theme." >&2; exit 1; }
 if [[ $(plymouth-set-default-theme) != "$previous_theme" ]]; then
   install -d -m 0755 /etc/plymouth
-  if [[ ! -s /etc/plymouth/plymouthd.conf ]]; then
-    printf '[Daemon]\n' >/etc/plymouth/plymouthd.conf
+  # Plymouth's setter only replaces an existing Theme= line under [Daemon].
+  if ! grep -Eq '^[[:space:]]*Theme[[:space:]]*=' /etc/plymouth/plymouthd.conf 2>/dev/null; then
+    { printf '[Daemon]\nTheme=%s\n' "$previous_theme"; grep -Fvx '[Daemon]' /etc/plymouth/plymouthd.conf 2>/dev/null || true; } >/etc/plymouth/plymouthd.conf.new
+    mv -fT /etc/plymouth/plymouthd.conf.new /etc/plymouth/plymouthd.conf
     chmod 0644 /etc/plymouth/plymouthd.conf
   fi
   plymouth-set-default-theme "$previous_theme"
