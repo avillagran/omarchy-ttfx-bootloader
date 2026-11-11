@@ -1,0 +1,9 @@
+#!/bin/sh
+# Closes the "if false" that 09_omarchy-boot-theme opened around 10_linux,
+# only when 09 succeeded in this grub-mkconfig run.
+marker_dir=/run
+[ -w "$marker_dir" ] || marker_dir=${TMPDIR:-/tmp}
+marker=$marker_dir/omarchy-boot-theme.grub-mkconfig.$PPID
+[ -e "$marker" ] || exit 0
+rm -f -- "$marker"
+echo "fi"

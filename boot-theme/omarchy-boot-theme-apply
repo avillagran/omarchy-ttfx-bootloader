@@ -1,0 +1,260 @@
+#!/bin/bash
+# omarchy-boot-theme-apply [--remove]
+#
+# Apply (or remove) the Omarchy boot menu theme for the bootloader in use:
+#   Limine: theme assets on the ESP under /boot/omarchy-boot-theme and a
+#           marked block at the top of /boot/limine.conf (the first occurrence
+#           of a key wins in Limine, so the rest of the file stays untouched).
+#   GRUB:   a drop-in in /etc/default/grub.d, the two grub.d scripts that name
+#           entries like Limine's tree, the theme under /boot/grub/themes, and
+#           a regenerated grub.cfg.
+# The art is the square Omarchy mark that the TTFX Plymouth plugin shows
+# during its firmware hold, at the plugin's size and position, taken from the
+# Plymouth theme (then the pristine copy under /usr/share/omarchy/default);
+# without a usable mark the renderer falls back to the TTFX logo of the
+# configured effect, so re-run it after changing the Plymouth effect.
+# GRUB waits 1s with the menu hidden, like Omarchy's Limine; for testing,
+# OMARCHY_BOOT_THEME_GRUB_TIMEOUT and OMARCHY_BOOT_THEME_GRUB_TIMEOUT_STYLE
+# (menu|hidden|countdown) override that.
+# Every file it replaces is backed up first under the state directory; it only
+# ever deletes files it created itself, by name.
+set -eEuo pipefail
+
+share=${OMARCHY_BOOT_THEME_SHARE:-/usr/share/omarchy/boot-theme}
+state=/var/lib/omarchy-boot-theme
+renderer=$share/omarchy-boot-theme
+limine_conf=/boot/limine.conf
+limine_assets=/boot/omarchy-boot-theme
+grub_dropin=/etc/default/grub.d/omarchy-boot-theme.cfg
+grub_theme=/boot/grub/themes/omarchy
+grub_scripts=(09_omarchy-boot-theme 10_omarchy-boot-theme-end)
+mark_candidates=(/usr/share/plymouth/themes/omarchy/boot-mark.png /usr/share/omarchy/default/plymouth/boot-mark.png)
+begin_marker="# >>> omarchy-boot-theme (managed by omarchy-boot-theme-apply)"
+end_marker="# <<< omarchy-boot-theme"
+
+remove=false
+case "${1:-}" in
+  "") ;;
+  --remove) remove=true ;;
+  *) echo "Usage: omarchy-boot-theme-apply [--remove]" >&2; exit 2 ;;
+esac
+(( EUID == 0 )) || { echo "omarchy-boot-theme-apply must run as root." >&2; exit 1; }
+
+detect_bootloader() {
+  if [[ -f $limine_conf ]]; then
+    echo limine
+  elif [[ -f /boot/grub/grub.cfg ]] && command -v grub-mkconfig >/dev/null; then
+    echo grub
+  else
+    echo none
+  fi
+}
+
+# The resolution the bootloader draws at. On Apple Silicon the firmware
+# framebuffer (device tree simple-framebuffer) is what GRUB gets; elsewhere the
+# internal panel's preferred mode, else the first connected output's.
+detect_resolution() {
+  local fb width height status modes connector
+  for fb in /sys/firmware/devicetree/base/chosen/framebuffer@*; do
+    [[ -r $fb/width && -r $fb/height ]] || continue
+    width=$(od -An -tu4 --endian=big "$fb/width" | tr -d ' ')
+    height=$(od -An -tu4 --endian=big "$fb/height" | tr -d ' ')
+    [[ $width =~ ^[0-9]+$ && $height =~ ^[0-9]+$ ]] && { echo "${width}x${height}"; return; }
+  done
+  for connector in /sys/class/drm/card*-eDP-* /sys/class/drm/card*-LVDS-* /sys/class/drm/card*-*; do
+    [[ -r $connector/status && -r $connector/modes ]] || continue
+    status=$(<"$connector/status")
+    [[ $status == connected ]] || continue
+    modes=$(head -n 1 "$connector/modes")
+    [[ $modes =~ ^[0-9]+x[0-9]+$ ]] && { echo "$modes"; return; }
+  done
+  echo 1920x1080
+}
+
+# The device scale Plymouth draws the mark at. A firmware framebuffer carries
+# no physical size, so the renderer's own guess (Plymouth's) applies and
+# nothing is printed. With a native driver Plymouth uses the panel's EDID
+# size (ply-utils.c get_device_scale): scale 2 when both axes exceed 192 dpi
+# and the panel is at least 1200 pixels tall, else 1.
+detect_scale() {
+  local fb connector status modes width height cm_w cm_h
+  for fb in /sys/firmware/devicetree/base/chosen/framebuffer@*; do
+    [[ -r $fb/width && -r $fb/height ]] && return 0
+  done
+  for connector in /sys/class/drm/card*-eDP-* /sys/class/drm/card*-LVDS-* /sys/class/drm/card*-*; do
+    [[ -r $connector/status && -r $connector/modes && -r $connector/edid ]] || continue
+    status=$(<"$connector/status")
+    [[ $status == connected ]] || continue
+    modes=$(head -n 1 "$connector/modes")
+    [[ $modes =~ ^([0-9]+)x([0-9]+)$ ]] || continue
+    width=${BASH_REMATCH[1]} height=${BASH_REMATCH[2]}
+    cm_w=$(od -An -tu1 -j21 -N1 "$connector/edid" 2>/dev/null | tr -d ' ')
+    cm_h=$(od -An -tu1 -j22 -N1 "$connector/edid" 2>/dev/null | tr -d ' ')
+    [[ $cm_w =~ ^[0-9]+$ && $cm_h =~ ^[0-9]+$ ]] || return 0
+    (( cm_w > 0 && cm_h > 0 )) || return 0
+    # Some panels encode the aspect ratio instead of a size.
+    if (( (cm_w == 16 && (cm_h == 9 || cm_h == 10)) )); then echo 1; return 0; fi
+    if (( width * 254 > 19200 * cm_w && height * 254 > 19200 * cm_h && height >= 1200 )); then
+      echo 2
+    else
+      echo 1
+    fi
+    return 0
+  done
+}
+
+# Notch rows m1n1 hid above the device-tree framebuffer (the plugin's
+# ttfx_devicetree_hidden_notch): the mark then sits where m1n1's logo did.
+detect_hidden_notch() {
+  local fb dcp width height notch
+  for fb in /sys/firmware/devicetree/base/chosen/framebuffer@*; do
+    [[ -r $fb/width && -r $fb/height ]] || continue
+    width=$(od -An -tu4 --endian=big "$fb/width" | tr -d ' ')
+    height=$(od -An -tu4 --endian=big "$fb/height" | tr -d ' ')
+    for dcp in /sys/firmware/devicetree/base/soc/dcp@*; do
+      [[ -r $dcp/apple,notch-height ]] || continue
+      notch=$(od -An -tu4 --endian=big "$dcp/apple,notch-height" | tr -d ' ')
+      [[ $width =~ ^[0-9]+$ && $height =~ ^[0-9]+$ && $notch =~ ^[0-9]+$ ]] || return 0
+      (( width > 0 && notch > 0 && notch < height )) || return 0
+      (( width * (height * 16 / width) / 16 == height )) && echo "$notch"
+      return 0
+    done
+  done
+}
+
+# --mark for the renderer: the first mark that exists, else none and the
+# renderer uses its own lookup (and the logo if that finds nothing).
+mark_args=()
+for mark in "${mark_candidates[@]}"; do
+  if [[ -f $mark ]]; then mark_args=(--mark "$mark"); break; fi
+done
+scale=$(detect_scale)
+[[ -n $scale ]] && mark_args+=(--scale "$scale")
+notch=$(detect_hidden_notch)
+[[ -n $notch ]] && mark_args+=(--hidden-notch "$notch")
+
+backup_once() {
+  local path=$1 name
+  name=$(printf '%s' "$path" | tr '/' '_')
+  install -d -m 0700 "$state"
+  if [[ ! -e $state/$name && ! -e $state/$name.absent ]]; then
+    if [[ -e $path ]]; then cp -a -- "$path" "$state/$name"; else : >"$state/$name.absent"; fi
+  fi
+}
+
+replace_file() {  # replace_file SOURCE DEST MODE: atomic within DEST's directory
+  local tmp
+  tmp=$(mktemp "$(dirname -- "$2")/.omarchy-boot-theme.XXXXXXXX")
+  cp -- "$1" "$tmp"
+  chmod "$3" "$tmp" 2>/dev/null || true  # vfat ESPs refuse chmod
+  mv -f -- "$tmp" "$2"
+}
+
+limine_without_block() {
+  awk -v b="$begin_marker" -v e="$end_marker" '
+    $0 == b { skip = 1; next }
+    skip && $0 == e { skip = 0; next }
+    !skip { print }' "$limine_conf"
+}
+
+apply_limine() {
+  local res=$1 work
+  work=$(mktemp -d "${TMPDIR:-/var/tmp}/omarchy-boot-theme.XXXXXXXX")
+  limine_without_block >"$work/limine.conf.base"
+  "$renderer" limine --width "${res%x*}" --height "${res#*x}" "${mark_args[@]}" \
+    --limine-conf "$work/limine.conf.base" --limine-path "boot():/omarchy-boot-theme" --out "$work/assets"
+  {
+    printf '%s\n' "$begin_marker"
+    cat "$work/assets/limine.conf.theme"
+    printf '%s\n' "$end_marker"
+    cat "$work/limine.conf.base"
+  } >"$work/limine.conf"
+  backup_once "$limine_conf"
+  install -d -m 0755 "$limine_assets"
+  replace_file "$work/assets/boot-theme.png" "$limine_assets/boot-theme.png" 0644
+  replace_file "$work/assets/boot-menu.png" "$limine_assets/boot-menu.png" 0644
+  replace_file "$work/assets/boot-font-8x16.bin" "$limine_assets/boot-font-8x16.bin" 0644
+  replace_file "$work/limine.conf" "$limine_conf" "$(stat -c %a "$limine_conf")"
+  rm -f -- "$work/assets/boot-theme.png" "$work/assets/boot-menu.png" "$work/assets/boot-font-8x16.bin" "$work/assets/limine.conf.theme" \
+    "$work/limine.conf.base" "$work/limine.conf"
+  rmdir -- "$work/assets" "$work"
+  echo "Limine theme applied at $res."
+}
+
+remove_limine() {
+  local work
+  [[ -f $limine_conf ]] || return 0
+  if grep -Fxq "$begin_marker" "$limine_conf"; then
+    work=$(mktemp "${TMPDIR:-/var/tmp}/omarchy-boot-theme.XXXXXXXX")
+    limine_without_block >"$work"
+    replace_file "$work" "$limine_conf" "$(stat -c %a "$limine_conf")"
+    rm -f -- "$work"
+  fi
+  rm -f -- "$limine_assets/boot-theme.png" "$limine_assets/boot-menu.png" "$limine_assets/boot-font-8x16.bin"
+  rmdir -- "$limine_assets" 2>/dev/null || true
+  echo "Limine theme removed."
+}
+
+regenerate_grub() {
+  local cfg=/boot/grub/grub.cfg
+  backup_once "$cfg"
+  cp -a -- "$cfg" "$state/grub.cfg.before-last-apply"
+  if ! grub-mkconfig -o "$cfg"; then
+    echo "grub-mkconfig failed; $cfg was left as it was." >&2
+    return 1
+  fi
+}
+
+apply_grub() {
+  local res=$1 script
+  local grub_timeout=${OMARCHY_BOOT_THEME_GRUB_TIMEOUT:-1}
+  local grub_timeout_style=${OMARCHY_BOOT_THEME_GRUB_TIMEOUT_STYLE:-hidden}
+  [[ $grub_timeout =~ ^[0-9]{1,3}$ ]] || { echo "Invalid GRUB timeout: $grub_timeout" >&2; return 1; }
+  [[ $grub_timeout_style =~ ^(menu|hidden|countdown)$ ]] || { echo "Invalid GRUB timeout style: $grub_timeout_style" >&2; return 1; }
+  backup_once "$grub_dropin"
+  install -d -m 0755 /etc/default/grub.d
+  cat >"$grub_dropin.new" <<EOF
+# Omarchy boot menu theme (managed by omarchy-boot-theme-apply).
+GRUB_THEME=$grub_theme/theme.txt
+GRUB_GFXMODE=$res,auto
+GRUB_TERMINAL_OUTPUT=gfxterm
+GRUB_TIMEOUT=$grub_timeout
+GRUB_TIMEOUT_STYLE=$grub_timeout_style
+EOF
+  mv -f -- "$grub_dropin.new" "$grub_dropin"
+  for script in "${grub_scripts[@]}"; do
+    backup_once "/etc/grub.d/$script"
+    replace_file "$share/grub.d/$script" "/etc/grub.d/$script" 0755
+  done
+  # 00_header only loads a theme that already exists: a first grub-mkconfig
+  # into the state directory renders it, the second writes the real grub.cfg.
+  install -d -m 0700 "$state"
+  grub-mkconfig -o "$state/grub.cfg.prerender" >/dev/null 2>&1 || true
+  rm -f -- "$state/grub.cfg.prerender"
+  regenerate_grub
+  grep -Fq "set theme=" /boot/grub/grub.cfg && grep -Fq "BEGIN /etc/grub.d/09_omarchy-boot-theme" /boot/grub/grub.cfg || {
+    echo "grub.cfg does not load the Omarchy theme." >&2
+    return 1
+  }
+  echo "GRUB theme applied at $res."
+}
+
+remove_grub() {
+  local script file
+  rm -f -- "$grub_dropin"
+  for script in "${grub_scripts[@]}"; do rm -f -- "/etc/grub.d/$script"; done
+  for file in theme.txt background.png select_c.png omarchy-boot.pf2; do rm -f -- "$grub_theme/$file"; done
+  rmdir -- "$grub_theme" 2>/dev/null || true
+  command -v grub-mkconfig >/dev/null && [[ -f /boot/grub/grub.cfg ]] && regenerate_grub
+  echo "GRUB theme removed."
+}
+
+[[ -x $renderer && -f $share/logo-finals.txt ]] || { echo "Missing $renderer or its logo data." >&2; exit 1; }
+bootloader=$(detect_bootloader)
+case "$bootloader:$remove" in
+  limine:false) apply_limine "$(detect_resolution)" ;;
+  limine:true) remove_limine ;;
+  grub:false) apply_grub "$(detect_resolution)" ;;
+  grub:true) remove_grub ;;
+  none:*) echo "No Limine or GRUB configuration found; nothing to do." ;;
+esac

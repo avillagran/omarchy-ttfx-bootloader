@@ -1,0 +1,734 @@
+#!/usr/bin/env python3
+"""Render the Omarchy boot menu theme for Limine and GRUB.
+
+Both bootloaders get one design: Limine's own menu layout (common/menu.c,
+Limine 12.9) drawn with the 8x16 VGA console font and Tokyo Night colours over
+a background that carries the boot art. Limine draws its menu itself; for GRUB
+the background also carries the "[-] Omarchy" tree that Limine would draw, and
+boot_menu sits exactly where Limine puts entry names.
+
+The art is chosen with --art:
+  mark (default)  the square Omarchy mark (boot-mark.png) that the TTFX
+                  Plymouth plugin shows during its firmware hold, with the
+                  plugin's exact geometry and resampling, so the picture stays
+                  put from the bootloader through the firmware framebuffer to
+                  Plymouth. Falls back to the logo when no usable mark is found.
+  logo            the TTFX logo final frame of the configured Plymouth effect.
+
+For Limine the mark comes as two images: boot-theme.png, the centred mark with
+the hint, shown during the quiet timeout (quiet_wallpaper, a Limine patch), and
+boot-menu.png, the mark alone above the entries, behind the revealed menu.
+
+  omarchy-boot-theme limine --width W --height H --limine-conf CONF --out DIR
+  omarchy-boot-theme grub   --width W --height H --entries FILE --out DIR
+  omarchy-boot-theme grub-linux --linux-cfg FILE --rest-cfg FILE --entries FILE
+      (grub.d helper: print 10_linux's entries named like Limine's tree and
+       write every top-level entry name, in menu order, to --entries)
+
+Common options: --art mark|logo, --mark PNG (default: the repository's
+default/plymouth/boot-mark.png next to this script, then the installed
+Plymouth theme's copy), --scale N (Plymouth device scale, default: Plymouth's
+own choice for a firmware framebuffer), --hint TEXT (the line near the bottom of the screen;
+'' leaves it out; default: how the menu is revealed, "Press any key for boot
+options" for Limine's quiet timeout, "Press Esc for boot options" for GRUB's
+hidden timeout), --effect NAME or --descriptor FILE
+(Effect= in [ttfx]), --logo-finals FILE, --font PSF. Only the Python standard
+library is used.
+"""
+import argparse, gzip, os, re, struct, sys, zlib
+
+HERE = os.path.dirname(os.path.realpath(__file__))
+BACKGROUND, FOREGROUND, ACCENT = 0x1a1b26, 0xc0caf5, 0x9ece6a
+# The boot-options hint near the bottom of the screen is drawn in the mark's
+# green (ACCENT), 9.4:1 on the background.
+# What reveals the menu: any key during Limine's quiet timeout; Esc, F4 or a
+# held Shift under GRUB's hidden timeout style (other keys are ignored).
+DEFAULT_HINTS = {"limine": "Press any key for boot options", "grub": "Press Esc for boot options"}
+MARGIN = 64
+LOGO_COLUMNS, LOGO_ROWS, LOGO_CELL = 162, 20, 10
+DIGITS = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+DEFAULT_EFFECT = "decrypt"
+# Where the mark is looked up when --mark is not given.
+MARK_CANDIDATES = (os.path.join(HERE, "..", "default", "plymouth", "boot-mark.png"),
+                   "/usr/share/plymouth/themes/omarchy/boot-mark.png")
+# native/plymouth-ttfx-plugin: TTFX_FIRMWARE_MARK_LOGICAL_SIZE (state.h),
+# FIRMWARE_MARK_MAX_SCALE and LOCK_MAX_DIMENSION (plugin.c).
+MARK_LOGICAL_SIZE, MARK_MAX_SCALE, MARK_MAX_DIMENSION = 128, 8, 4096
+
+
+# ---------------------------------------------------------------- inputs
+
+def effect_from_descriptor(path):
+    section, effect = None, None
+    try:
+        for line in open(path, encoding="utf-8", errors="replace"):
+            line = line.strip()
+            if line.startswith("["):
+                section = line
+            elif section == "[ttfx]" and line.startswith("Effect="):
+                effect = line.split("=", 1)[1].strip()
+    except OSError:
+        pass
+    return effect or DEFAULT_EFFECT
+
+
+def read_logo_finals(path, effect):
+    """Return (mask rows, {(row, col): rgb}) for effect, or decrypt if unknown."""
+    mask, groups, current = [], [], None
+    for line in open(path):
+        key, _, value = line.rstrip("\n").partition(" ")
+        if key == "mask":
+            mask.append(value)
+        elif key == "effects":
+            current = {"effects": value.split(), "rows": []}
+            groups.append(current)
+        elif key == "palette":
+            width, *colours = value.split()
+            current["width"], current["palette"] = int(width), [int(c, 16) for c in colours]
+        elif key == "row":
+            current["rows"].append(value)
+    if len(mask) != LOGO_ROWS or any(len(r) != LOGO_COLUMNS for r in mask):
+        raise SystemExit(f"{path}: malformed logo mask")
+    by_name = {name: g for g in groups for name in g["effects"]}
+    group = by_name.get(effect) or by_name[DEFAULT_EFFECT]
+    colours, w = {}, group["width"]
+    for r, (mask_row, digits) in enumerate(zip(mask, group["rows"])):
+        cols = [c for c, ch in enumerate(mask_row) if ch == "#"]
+        if len(digits) != len(cols) * w:
+            raise SystemExit(f"{path}: row {r} of {group['effects'][0]} does not match the mask")
+        for i, c in enumerate(cols):
+            index = 0
+            for d in digits[i * w:(i + 1) * w]:
+                index = index * 62 + DIGITS.index(d)
+            colours[(r, c)] = group["palette"][index]
+    return colours
+
+
+def read_psf(path):
+    data = (gzip.open if path.endswith(".gz") else open)(path, "rb").read()
+    if data[:4] == b"\x72\xb5\x4a\x86":
+        _, hs, flags, n, cs, h, w = struct.unpack("<7I", data[4:32])
+        glyphs = [data[hs + i * cs:hs + (i + 1) * cs] for i in range(n)]
+        uni, table, pos = {}, data[hs + n * cs:], 0
+        for i in range(n if flags & 1 else 0):
+            end = table.index(b"\xff", pos)
+            uni[i] = [ord(c) for c in table[pos:end].split(b"\xfe")[0].decode("utf-8")]
+            pos = end + 1
+    elif data[:2] == b"\x36\x04":
+        mode, h, w = data[2], data[3], 8
+        n = 512 if mode & 1 else 256
+        glyphs = [data[4 + i * h:4 + (i + 1) * h] for i in range(n)]
+        uni, table, pos = {}, data[4 + n * h:], 0
+        for i in range(n if mode & 2 else 0):
+            cps = []
+            while pos + 1 < len(table):
+                v = table[pos] | table[pos + 1] << 8
+                pos += 2
+                if v == 0xFFFF:
+                    break
+                if v != 0xFFFE:
+                    cps.append(v)
+            uni[i] = cps
+    else:
+        raise SystemExit(f"{path}: not a PSF font")
+    if w != 8 or h != 16 or len(glyphs) < 256:
+        raise SystemExit(f"{path}: need an 8x16 font with at least 256 glyphs")
+    glyphs = glyphs[:256]
+    by_codepoint = {}
+    for i in range(256):
+        for cp in uni.get(i, []):
+            by_codepoint.setdefault(cp, glyphs[i])
+    return glyphs, uni, by_codepoint
+
+
+class MarkError(Exception):
+    pass
+
+
+def read_png(path):
+    """Decode an 8-bit, non-interlaced RGB or RGBA PNG into (width, height,
+    [ARGB32 premultiplied as Plymouth's ply-image.c stores it]). Anything else
+    raises MarkError."""
+    try:
+        data = open(path, "rb").read()
+    except OSError as e:
+        raise MarkError(f"{path}: {e.strerror}")
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise MarkError(f"{path}: not a PNG file")
+    pos, header, idat, trns = 8, None, [], None
+    while True:
+        if pos + 12 > len(data):
+            raise MarkError(f"{path}: truncated PNG")
+        length, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + length]
+        if len(body) != length or pos + 12 + length > len(data):
+            raise MarkError(f"{path}: truncated PNG")
+        if struct.unpack(">I", data[pos + 8 + length:pos + 12 + length])[0] != zlib.crc32(kind + body):
+            raise MarkError(f"{path}: bad CRC in {kind.decode('latin-1')} chunk")
+        pos += 12 + length
+        if kind == b"IHDR":
+            header = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"tRNS":
+            trns = body
+        elif kind == b"IEND":
+            break
+    if header is None or not idat:
+        raise MarkError(f"{path}: missing IHDR or IDAT")
+    width, height, depth, colour_type, compression, filtering, interlace = header
+    if depth != 8 or colour_type not in (2, 6) or compression or filtering or interlace:
+        raise MarkError(f"{path}: unsupported PNG (bit depth {depth}, colour type {colour_type}, "
+                        f"interlace {interlace}); need 8-bit RGB or RGBA, non-interlaced")
+    if not (0 < width <= MARK_MAX_DIMENSION and 0 < height <= MARK_MAX_DIMENSION):
+        raise MarkError(f"{path}: {width}x{height} is outside 1..{MARK_MAX_DIMENSION}")
+    bpp = 4 if colour_type == 6 else 3
+    stride = width * bpp
+    try:
+        raw = zlib.decompress(b"".join(idat))
+    except zlib.error as e:
+        raise MarkError(f"{path}: corrupt image data ({e})")
+    if len(raw) < height * (stride + 1):
+        raise MarkError(f"{path}: image data too short")
+    key = None
+    if trns is not None and colour_type == 2 and len(trns) == 6:
+        key = bytes(struct.unpack(">HHH", trns)[i] & 255 for i in range(3))
+    pixels, prev = [], bytearray(stride)
+    for y in range(height):
+        o = y * (stride + 1)
+        kind, line = raw[o], bytearray(raw[o + 1:o + 1 + stride])
+        if kind == 1:
+            for x in range(bpp, stride):
+                line[x] = (line[x] + line[x - bpp]) & 255
+        elif kind == 2:
+            for x in range(stride):
+                line[x] = (line[x] + prev[x]) & 255
+        elif kind == 3:
+            for x in range(stride):
+                left = line[x - bpp] if x >= bpp else 0
+                line[x] = (line[x] + ((left + prev[x]) >> 1)) & 255
+        elif kind == 4:
+            for x in range(stride):
+                a = line[x - bpp] if x >= bpp else 0
+                b, c = prev[x], prev[x - bpp] if x >= bpp else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+        elif kind != 0:
+            raise MarkError(f"{path}: unknown PNG filter {kind} in row {y}")
+        for x in range(0, stride, bpp):
+            r, g, b = line[x], line[x + 1], line[x + 2]
+            if bpp == 4:
+                alpha = line[x + 3]
+            else:
+                alpha = 0 if key is not None and bytes((r, g, b)) == key else 255
+            if alpha != 255:  # ply-image.c transform_to_argb32
+                r = int(min(max(((r / 255.0) * (alpha / 255.0)) * 255.0, 0), 255.0))
+                g = int(min(max(((g / 255.0) * (alpha / 255.0)) * 255.0, 0), 255.0))
+                b = int(min(max(((b / 255.0) * (alpha / 255.0)) * 255.0, 0), 255.0))
+            pixels.append(alpha << 24 | r << 16 | g << 8 | b)
+        prev = line
+    return width, height, pixels
+
+
+def ply_resize(width, height, pixels, new_width, new_height):
+    """ply_pixel_buffer_resize + ply_pixels_interpolate (Plymouth
+    ply-pixel-buffer.c), operation for operation, so the result is the same
+    ARGB32 the plugin composites."""
+    out = []
+    scale_x = (width - 1.0) / max(new_width - 1, 1)
+    scale_y = (height - 1.0) / max(new_height - 1, 1)
+    masks = [0xFF << (i * 8) for i in range(4)]
+    for y in range(new_height):
+        sy = y * scale_y
+        iy0, iy1 = min(int(sy), height - 1), min(int(sy + 1), height - 1)
+        fy = sy - int(sy)
+        row0, row1 = iy0 * width, iy1 * width
+        for x in range(new_width):
+            sx = x * scale_x
+            ix0, ix1 = min(int(sx), width - 1), min(int(sx + 1), width - 1)
+            p00, p01 = pixels[row0 + ix0], pixels[row0 + ix1]
+            p10, p11 = pixels[row1 + ix0], pixels[row1 + ix1]
+            if not (p00 or p01 or p10 or p11):
+                out.append(0)
+                continue
+            fx = sx - int(sx)
+            reply = 0
+            for mask in masks:
+                value = 0
+                value = int(value + (p00 & mask) * (1 - fx) * (1 - fy))
+                value = int(value + (p01 & mask) * fx * (1 - fy))
+                value = int(value + (p10 & mask) * (1 - fx) * fy)
+                value = int(value + (p11 & mask) * fx * fy)
+                reply |= value & mask
+            out.append(reply)
+    return out
+
+
+def plymouth_firmware_scale(width, height):
+    """Device scale Plymouth's drm renderer picks for a simpledrm framebuffer
+    without physical size information (ply-utils.c get_device_scale_guess),
+    clamped like firmware_mark_for_scale() in the plugin."""
+    w, h = max(width, height), min(width, height)
+    if w / h == 1.5:
+        scale = 2 if w >= 1800 and h >= 1200 else 1
+    else:
+        scale = 2 if w >= 2880 and h >= 1620 else 1
+    return min(max(scale, 1), MARK_MAX_SCALE)
+
+
+def load_mark(explicit):
+    """The mark's (width, height, pixels) and path, or None with a warning."""
+    candidates = [explicit] if explicit else [os.path.normpath(p) for p in MARK_CANDIDATES]
+    for path in candidates:
+        if not explicit and not os.path.isfile(path):
+            continue
+        try:
+            return read_png(path), path
+        except MarkError as e:
+            print(f"omarchy-boot-theme: {e}; using the logo instead", file=sys.stderr)
+            return None
+    print("omarchy-boot-theme: no boot-mark.png found; using the logo instead", file=sys.stderr)
+    return None
+
+
+class Art:
+    """What sits on the background: the firmware-hold mark or the logo."""
+
+    def __init__(self, a):
+        self.mark = None
+        if a.art == "mark":
+            loaded = load_mark(a.mark)
+            if loaded:
+                (w, h, pixels), self.mark_path = loaded
+                self.source = (w, h, pixels)
+                self.scale = a.scale or plymouth_firmware_scale(a.width, a.height)
+                # Behind a hidden notch the plugin lifts the hold mark by half
+                # the notch (ttfx_firmware_mark_lift), to where m1n1 centred
+                # its logo on the whole panel; the bootloader follows suit.
+                self.lift = (a.hidden_notch + self.scale) // (2 * self.scale)
+                self.size = MARK_LOGICAL_SIZE * self.scale
+                self.mark = ply_resize(w, h, pixels, self.size, self.size)
+        if self.mark is None:
+            self.effect = a.effect or effect_from_descriptor(a.descriptor)
+            self.colours = read_logo_finals(a.logo_finals, self.effect)
+
+    def draw(self, canvas, term, tree_start, hint, glyphs):
+        if self.mark is not None:
+            x, y = canvas.mark(self.mark, self.size, self.scale, lift=self.lift)
+            summary = f"mark={self.size}px@{x},{y} scale={self.scale}"
+            if hint:
+                # One line near the bottom of the screen, a twenty-fifth of
+                # its height above the edge, in the menu's font size, centred on
+                # the mark's centre.
+                s = term["scale"]
+                width, height = len(hint) * 8 * s, 16 * s
+                hx = x + self.size // 2 - width // 2
+                hy = canvas.height - canvas.height // 25 - height
+                if hx < 0 or hx + width > canvas.width or hy < y + self.size + height:
+                    print(f"omarchy-boot-theme: hint does not fit at {canvas.width}x{canvas.height}; "
+                          "leaving it out", file=sys.stderr)
+                else:
+                    canvas.text_at(hx, hy, s, hint, ACCENT, glyphs)
+                    summary += f" hint={width}x{height}@{hx},{hy}"
+            return f"{summary} source={self.mark_path}"
+        k, top = logo_placement(canvas.width, canvas.height, term, tree_start)
+        canvas.logo(self.colours, k, top)
+        return f"effect={self.effect} logo_cell={k}px@{top}"
+
+    def draw_menu(self, canvas, term, tree_start):
+        """The art behind the revealed menu: the mark without the hint, raised
+        into the gap between the help rows and the tree so the entries never
+        cover it, shrunk when the gap is shorter than the mark and left out
+        when under 32 pixels would remain. The logo already sits there."""
+        if self.mark is None:
+            return self.draw(canvas, term, tree_start, None, None)
+        gap_top = term["oy"] + 6 * term["ch"]          # below the secondary help row
+        gap_bottom = term["oy"] + tree_start * term["ch"]
+        size = min(self.size, gap_bottom - gap_top - 2 * term["ch"])
+        if size < 32:
+            return "menu_mark=none"
+        mark = self.mark if size == self.size else ply_resize(*self.source, size, size)
+        x, y = canvas.mark(mark, size, self.scale, top=gap_top + (gap_bottom - gap_top - size) // 2)
+        return f"menu_mark={size}px@{x},{y}"
+
+
+# ---------------------------------------------------------------- layout
+
+def font_scale(width, height):
+    """Limine's term_font_scale default (CONFIG.md)."""
+    if width >= 5120 and height >= 2880:
+        return 4
+    if width >= 2560 and height >= 1440:
+        return 2
+    return 1
+
+
+def terminal(width, height):
+    s = font_scale(width, height)
+    cw, ch = 8 * s, 16 * s  # term_font_spacing: 0
+    cols, rows = (width - 2 * MARGIN) // cw, (height - 2 * MARGIN) // ch
+    return dict(scale=s, cw=cw, ch=ch, cols=cols, rows=rows,
+                ox=(width - cols * cw) // 2, oy=(height - rows * ch) // 2)
+
+
+def tree_layout(term, tree):
+    """tree: list of (level, is_dir, name). Mirrors print_tree() sizing and
+    the menu() placement in Limine's common/menu.c."""
+    header_offset = 4  # branding (2) + secondary help (2)
+    max_len = max((2 * level + 3 + 1 + len(name) + 1) for level, _, name in tree)
+    prefix = (term["cols"] - max_len - 3) // 2 if term["cols"] > max_len + 3 else 1
+    height = min(len(tree), term["rows"] - 8 - header_offset)
+    start = max((term["rows"] - height) // 2, 4 + header_offset)
+    return prefix, start
+
+
+def logo_placement(width, height, term, tree_start):
+    """Cell height in pixels for the logo, and its top edge. Like the Plymouth
+    plugin, cells shrink to fit; from 10px up they stay multiples of 10 so the
+    blocks keep the plugin's proportions exactly."""
+    gap_top = term["oy"] + 6 * term["ch"]          # below the secondary help row
+    gap_bottom = term["oy"] + tree_start * term["ch"]
+    gap = gap_bottom - gap_top
+    by_height = int(gap * 0.6) // LOGO_ROWS
+    by_width = (width * 9 // 10) * 100 // (LOGO_COLUMNS * 51)
+    cell = max(2, min(by_height, by_width))
+    if cell >= LOGO_CELL:
+        cell -= cell % LOGO_CELL
+    return cell, gap_top + (gap - LOGO_ROWS * cell) // 2
+
+
+# ---------------------------------------------------------------- drawing
+
+class Canvas:
+    def __init__(self, width, height, colour):
+        self.width, self.height = width, height
+        self.pix = bytearray(bytes((colour >> 16, colour >> 8 & 255, colour & 255)) * (width * height))
+
+    def fill(self, x, y, w, h, colour):
+        x0, y0, x1, y1 = max(x, 0), max(y, 0), min(x + w, self.width), min(y + h, self.height)
+        if x0 >= x1 or y0 >= y1:
+            return
+        run = bytes((colour >> 16, colour >> 8 & 255, colour & 255)) * (x1 - x0)
+        for yy in range(y0, y1):
+            o = (yy * self.width + x0) * 3
+            self.pix[o:o + len(run)] = run
+
+    def text(self, term, col, row, string, colour, glyphs):
+        self.text_at(term["ox"] + col * term["cw"], term["oy"] + row * term["ch"],
+                     term["scale"], string, colour, glyphs)
+
+    def text_at(self, x, y, s, string, colour, glyphs):
+        """string in the 8x16 font scaled by s, top-left cell corner at x, y."""
+        for i, char in enumerate(string):
+            glyph = glyphs.get(ord(char))
+            if glyph is None:
+                raise SystemExit(f"font has no glyph for {char!r}")
+            x0 = x + i * 8 * s
+            for gy, bits in enumerate(glyph):
+                for gx in range(8):
+                    if bits >> (7 - gx) & 1:
+                        self.fill(x0 + gx * s, y + gy * s, s, s, colour)
+
+    def logo(self, colours, cell, top):
+        """Plymouth plugin geometry: square-ish cells, x edges at
+        column * cell * 51 / 100 (ttfx_geometry_x_edge)."""
+        edge = lambda c: c * cell * 51 // 100
+        x0 = (self.width - edge(LOGO_COLUMNS)) // 2
+        for (r, c), colour in colours.items():
+            self.fill(x0 + edge(c), top + r * cell, edge(c + 1) - edge(c), cell, colour)
+
+    def mark(self, pixels, size, scale, top=None, lift=0):
+        """draw_firmware_hold() in the plugin: the mark centred in logical
+        pixels of the display (width / scale), placed at scale times that
+        offset, composited over the opaque background with Plymouth's
+        blend_two_pixel_values(). Returns the top-left corner in pixels.
+        With top, the mark is centred horizontally at that row instead; lift
+        raises it by that many logical pixels."""
+        half = lambda n: -(-n // 2) if n < 0 else n // 2  # C division truncates
+        x = half(self.width // scale - MARK_LOGICAL_SIZE) * scale
+        y = (half(self.height // scale - MARK_LOGICAL_SIZE) - lift) * scale
+        if top is not None:
+            x, y = (self.width - size) // 2, top
+        for my in range(size):
+            yy = y + my
+            if not 0 <= yy < self.height:
+                continue
+            for mx in range(size):
+                xx = x + mx
+                value = pixels[my * size + mx]
+                alpha = value >> 24
+                if alpha == 0 or not 0 <= xx < self.width:
+                    continue
+                o = (yy * self.width + xx) * 3
+                if alpha == 0xff:
+                    self.pix[o:o + 3] = bytes((value >> 16 & 255, value >> 8 & 255, value & 255))
+                    continue
+                out = []
+                for shift, old in zip((16, 8, 0), self.pix[o:o + 3]):
+                    c = (value >> shift & 255) * 255 + old * (255 - alpha)
+                    out.append(((c + (c >> 8) + 0x80) >> 8) & 255)
+                self.pix[o:o + 3] = bytes(out)
+        return x, y
+
+    def save(self, path):
+        w = self.width * 3
+        raw = b"".join(b"\0" + bytes(self.pix[y * w:(y + 1) * w]) for y in range(self.height))
+        chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+        write_atomic(path, b"\x89PNG\r\n\x1a\n"
+                     + chunk(b"IHDR", struct.pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0))
+                     + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def write_atomic(path, data):
+    tmp = f"{path}.tmp.{os.getpid()}"
+    with open(tmp, "wb") as f:
+        f.write(data if isinstance(data, bytes) else data.encode())
+    os.replace(tmp, path)
+
+
+def write_bdf(path, glyphs, uni, s):
+    out = ["STARTFONT 2.1", f"FONT omarchy-boot-{16 * s}", f"SIZE {16 * s} 75 75",
+           f"FONTBOUNDINGBOX {8 * s} {16 * s} 0 {-4 * s}", "STARTPROPERTIES 3",
+           f"PIXEL_SIZE {16 * s}", f"FONT_ASCENT {12 * s}", f"FONT_DESCENT {4 * s}", "ENDPROPERTIES"]
+    chars = []
+    for i, g in enumerate(glyphs):
+        for cp in sorted(set(uni.get(i, []))):
+            bitmap = []
+            for byte in g:
+                bits = "".join(("1" if byte >> (7 - b) & 1 else "0") * s for b in range(8))
+                bitmap += [f"{int(bits, 2):0{s * 2}X}"] * s
+            chars.append("\n".join([f"STARTCHAR U+{cp:04X}", f"ENCODING {cp}", "SWIDTH 1000 0",
+                                    f"DWIDTH {8 * s} 0", f"BBX {8 * s} {16 * s} 0 {-4 * s}",
+                                    "BITMAP", *bitmap, "ENDCHAR"]))
+    write_atomic(path, "\n".join(out + [f"CHARS {len(chars)}"] + chars + ["ENDFONT"]) + "\n")
+
+
+def png_solid(path, colour):
+    c = Canvas(8, 8, colour)
+    c.save(path)
+
+
+# ---------------------------------------------------------------- limine
+
+def limine_tree(conf_path):
+    """Visible rows of a limine.conf menu: (level, is_dir, name)."""
+    entries = []
+    for line in open(conf_path, encoding="utf-8", errors="replace"):
+        m = re.match(r"^\s*(/+)(\+?)(.*?)\s*$", line)
+        if m and m.group(3):
+            entries.append((len(m.group(1)) - 1, m.group(2) == "+", m.group(3)))
+    rows, hidden_below = [], None
+    for i, (level, expanded, name) in enumerate(entries):
+        if hidden_below is not None and level > hidden_below:
+            continue
+        hidden_below = None
+        is_dir = i + 1 < len(entries) and entries[i + 1][0] > level
+        rows.append((level, is_dir, name))
+        if is_dir and not expanded:
+            hidden_below = level
+    return rows or [(0, False, "")]
+
+
+def render_limine(a, term, art, glyphs, by_cp):
+    tree = limine_tree(a.limine_conf)
+    _, start = tree_layout(term, tree)
+    canvas = Canvas(a.width, a.height, BACKGROUND)
+    summary = art.draw(canvas, term, start, a.hint, by_cp)
+    canvas.save(os.path.join(a.out, "boot-theme.png"))
+    # The menu has its own image: quiet_wallpaper (a Limine patch, ignored by
+    # a stock Limine, which draws nothing while quiet) is what the timeout
+    # shows, wallpaper is what a key press reveals behind the entries.
+    menu = Canvas(a.width, a.height, BACKGROUND)
+    summary += " " + art.draw_menu(menu, term, start)
+    menu.save(os.path.join(a.out, "boot-menu.png"))
+    write_atomic(os.path.join(a.out, "boot-font-8x16.bin"), b"".join(glyphs))
+    s, path = term["scale"], a.limine_path.rstrip("/")
+    write_atomic(os.path.join(a.out, "limine.conf.theme"), f"""\
+interface_resolution: {a.width}x{a.height}
+wallpaper: {path}/boot-menu.png
+quiet_wallpaper: {path}/boot-theme.png
+wallpaper_style: centered
+backdrop: {BACKGROUND:06x}
+term_background: ff{BACKGROUND:06x}
+term_margin: {MARGIN}
+term_margin_gradient: 0
+term_font: {path}/boot-font-8x16.bin
+term_font_size: 8x16
+term_font_scale: {s}x{s}
+term_font_spacing: 0
+""")
+    return summary
+
+
+# ---------------------------------------------------------------- grub
+
+def render_grub(a, term, art, glyphs, uni, by_cp):
+    names = [n.strip() for n in open(a.entries, encoding="utf-8", errors="replace") if n.strip()]
+    if not names:
+        raise SystemExit(f"{a.entries}: no menu entries")
+    tree = [(0, True, a.root_name)] + [(1, False, n) for n in names]
+    prefix, start = tree_layout(term, tree)
+    canvas = Canvas(a.width, a.height, BACKGROUND)
+    summary = art.draw(canvas, term, start, a.hint, by_cp)
+    cw, ch, ox, oy = term["cw"], term["ch"], term["ox"], term["oy"]
+    visible = min(len(tree), term["rows"] - 12)
+    # Limine draws the directory row and the branches; boot_menu draws names.
+    canvas.text(term, prefix, start, f"[-] {a.root_name}", FOREGROUND, by_cp)
+    for i in range(1, visible):
+        branch = " └──►" if i == len(tree) - 1 else " ├──►"
+        canvas.text(term, prefix, start + i, branch, FOREGROUND, by_cp)
+    canvas.save(os.path.join(a.out, "background.png"))
+    write_bdf(os.path.join(a.out, "omarchy-boot.bdf"), glyphs, uni, term["scale"])
+    png_solid(os.path.join(a.out, "select_c.png"), FOREGROUND)
+
+    font = f'"Omarchy Boot Regular {ch}"'
+    name_width = max(len(n) for n in names) + 2
+    lines = ['title-text: ""', 'desktop-image: "background.png"',
+             'desktop-image-scale-method: "padding"', f'desktop-color: "#{BACKGROUND:06x}"',
+             f"terminal-font: {font}", "",
+             f'+ label {{ left = 0 top = {oy + ch} width = 100% height = {ch} align = "center" '
+             f'text = "Omarchy Bootloader" color = "#{ACCENT:06x}" font = {font} }}']
+    help_rows = [(3, [("ARROWS", ACCENT), (" Select    ", FOREGROUND), ("ENTER", ACCENT),
+                      (" Boot    ", FOREGROUND), ("E", ACCENT), (" Edit", FOREGROUND)]),
+                 (5, [("C", ACCENT), (" Command Line", FOREGROUND)])]
+    for row, parts in help_rows:
+        col = (term["cols"] - sum(len(t) for t, _ in parts)) // 2
+        for text, colour in parts:
+            lead = len(text) - len(text.lstrip(" "))
+            word = text.strip(" ")
+            lines.append(f'+ label {{ left = {ox + (col + lead) * cw} top = {oy + row * ch} '
+                         f'width = {len(word) * cw} height = {ch} text = "{word}" '
+                         f'color = "#{colour:06x}" font = {font} }}')
+            col += len(text)
+    lines += ["+ boot_menu {",
+              f"    left = {ox + (prefix + 5) * cw} top = {oy + (start + 1) * ch}",
+              f"    width = {name_width * cw} height = {(visible - 1) * ch}",
+              f"    item_font = {font} item_color = \"#{FOREGROUND:06x}\" selected_item_color = \"#{BACKGROUND:06x}\"",
+              f"    item_height = {ch} item_spacing = 0 item_padding = 0",
+              "    icon_width = 0 icon_height = 0 item_icon_space = %d" % cw,
+              '    selected_item_pixmap_style = "select_*.png" scrollbar = false', "  }",
+              f'+ label {{ id = "__timeout__" left = 0 top = {oy + (term["rows"] - 2) * ch} width = 100% '
+              f'height = {ch} align = "center" text = "Booting automatically in %d..." '
+              f'color = "#{ACCENT:06x}" font = {font} }}']
+    write_atomic(os.path.join(a.out, "theme.txt"), "\n".join(lines) + "\n")
+    return summary
+
+
+# ---------------------------------------------------------------- grub.d
+
+LINUX_TITLE = re.compile(r"^(?P<os>.*), with Linux (?P<version>.+?)(?: \((?P<kind>fallback|booster) initramfs\)| \((?P<recovery>recovery mode)\))?$")
+
+
+def grub_unquote(text):
+    """First single-quoted GRUB word of text, and the rest of the line."""
+    assert text.startswith("'")
+    out, i = "", 1
+    while True:
+        j = text.index("'", i)
+        out += text[i:j]
+        if text.startswith("'\\''", j):  # GRUB spells a quote inside quotes '\''
+            out += "'"
+            i = j + 4
+            continue
+        return out, text[j + 1:]
+
+
+def grub_quote(text):
+    return "'" + text.replace("'", "'\\''") + "'"
+
+
+def top_level_titles(cfg):
+    titles, depth = [], 0
+    for line in cfg.splitlines():
+        stripped = line.strip()
+        if depth == 0:
+            m = re.match(r"^(menuentry|submenu)\s+(.*)$", stripped)
+            if m and m.group(2).startswith("'"):
+                titles.append(grub_unquote(m.group(2))[0])
+        if re.match(r"^(menuentry|submenu)\s", stripped) and stripped.endswith("{"):
+            depth += 1
+        elif stripped == "}" and depth:
+            depth -= 1
+    return titles
+
+
+def grub_linux(a):
+    out, names, skip = [], [], False
+    for line in open(a.linux_cfg, encoding="utf-8", errors="replace").read().splitlines():
+        if skip:
+            skip = line != "}"
+            continue
+        m = re.match(r"^menuentry (.*)$", line)
+        if m:
+            title, rest = grub_unquote(m.group(1))
+            if "'gnulinux-simple-" in rest:  # duplicate of the newest kernel
+                skip = True
+                continue
+            t = LINUX_TITLE.match(title)
+            if t:
+                suffix = f" ({t.group('kind')})" if t.group("kind") else " (recovery)" if t.group("recovery") else ""
+                title = t.group("version") + suffix
+            names.append(title)
+            line = "menuentry " + grub_quote(title) + rest
+        out.append(line)
+    rest = open(a.rest_cfg, encoding="utf-8", errors="replace").read() if a.rest_cfg else ""
+    names += top_level_titles(rest)
+    write_atomic(a.entries, "\n".join(names) + "\n")
+    sys.stdout.write("\n".join(out) + "\n")
+
+
+# ---------------------------------------------------------------- main
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    p.add_argument("target", choices=("limine", "grub", "grub-linux"))
+    p.add_argument("--width", type=int)
+    p.add_argument("--height", type=int)
+    p.add_argument("--out")
+    p.add_argument("--linux-cfg")
+    p.add_argument("--rest-cfg")
+    p.add_argument("--art", choices=("mark", "logo"), default="mark")
+    p.add_argument("--mark")
+    p.add_argument("--scale", type=int)
+    p.add_argument("--hidden-notch", type=int, default=0,
+                   help="notch rows hidden above the framebuffer (Apple apple,notch-height)")
+    p.add_argument("--hint", help="line near the bottom of the screen; '' disables it")
+    p.add_argument("--effect")
+    p.add_argument("--descriptor", default="/usr/share/plymouth/themes/omarchy/omarchy.plymouth")
+    p.add_argument("--logo-finals", default=os.path.join(HERE, "logo-finals.txt"))
+    p.add_argument("--font", default="/usr/share/kbd/consolefonts/default8x16.psfu.gz")
+    p.add_argument("--limine-conf")
+    p.add_argument("--limine-path", default="boot():/omarchy-boot-theme")
+    p.add_argument("--entries")
+    p.add_argument("--root-name", default="Omarchy")
+    a = p.parse_args()
+    if a.target == "grub-linux":
+        if not (a.linux_cfg and a.entries):
+            p.error("grub-linux needs --linux-cfg and --entries")
+        return grub_linux(a)
+    if not (a.width and a.height and a.out):
+        p.error("--width, --height and --out are required")
+    if not (640 <= a.width <= 8192 and 480 <= a.height <= 8192):
+        raise SystemExit(f"unsupported resolution {a.width}x{a.height}")
+    if a.target == "limine" and not a.limine_conf:
+        p.error("limine needs --limine-conf")
+    if a.target == "grub" and not a.entries:
+        p.error("grub needs --entries")
+    if a.scale is not None and not 1 <= a.scale <= MARK_MAX_SCALE:
+        p.error(f"--scale must be 1..{MARK_MAX_SCALE}")
+    if a.hint is None:
+        a.hint = DEFAULT_HINTS[a.target]
+    art = Art(a)
+    glyphs, uni, by_cp = read_psf(a.font)
+    os.makedirs(a.out, exist_ok=True)
+    term = terminal(a.width, a.height)
+    if a.target == "limine":
+        summary = render_limine(a, term, art, glyphs, by_cp)
+    else:
+        summary = render_grub(a, term, art, glyphs, uni, by_cp)
+    print(f"{a.target} {a.width}x{a.height} font={term['scale']}x {summary}", file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

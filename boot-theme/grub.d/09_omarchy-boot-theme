@@ -1,0 +1,69 @@
+#!/bin/sh
+# Omarchy boot theme for GRUB. While GRUB_THEME is Omarchy's, emit
+# 10_linux's entries named the way Limine's menu names them, render the theme
+# for the full entry list, and open an "if false" that
+# 10_omarchy-boot-theme-end closes, so the stock 10_linux output between them
+# is never defined. Any failure leaves the stock menu untouched.
+share=/usr/share/omarchy/boot-theme
+theme_dir=/boot/grub/themes/omarchy
+marker_dir=/run
+[ -w "$marker_dir" ] || marker_dir=${TMPDIR:-/tmp}
+marker=$marker_dir/omarchy-boot-theme.grub-mkconfig.$PPID
+rm -f -- "$marker"
+
+[ "${GRUB_THEME:-}" = "$theme_dir/theme.txt" ] || exit 0
+[ -x /etc/grub.d/10_linux ] && [ -x "$share/omarchy-boot-theme" ] || exit 0
+command -v python3 >/dev/null && command -v grub-mkfont >/dev/null || exit 0
+mode=${GRUB_GFXMODE%%,*}
+width=${mode%x*} height=${mode#*x}
+case "$width$height" in *[!0-9]*|'') exit 0 ;; esac
+
+work=$(mktemp -d "${TMPDIR:-/tmp}/omarchy-boot-theme.XXXXXXXX") || exit 0
+theme_files="theme.txt background.png select_c.png omarchy-boot.pf2"
+cleanup() {
+  for file in $theme_files omarchy-boot.bdf; do rm -f -- "$work/theme/$file"; done
+  rmdir -- "$work/theme" 2>/dev/null
+  rm -f -- "$work/linux.cfg" "$work/rest.cfg" "$work/entries" "$work/menu.cfg"
+  rmdir -- "$work" 2>/dev/null
+}
+
+render() (
+  set -e
+  GRUB_DISABLE_SUBMENU=true /etc/grub.d/10_linux >"$work/linux.cfg"
+  # Later scripts only contribute entry names to the tree: run them for their
+  # titles; grub-mkconfig runs them again for the real menu.
+  : >"$work/rest.cfg"
+  for script in /etc/grub.d/*; do
+    name=${script##*/}
+    case "$name" in [0-9][0-9]_*) ;; *) continue ;; esac
+    case "$name" in *~|*.pacnew|*.pacsave|*.dpkg-*) continue ;; esac
+    [ "$name" \> 10_omarchy-boot-theme-end ] && [ -x "$script" ] || continue
+    "$script" >>"$work/rest.cfg" 2>/dev/null || true
+  done
+  "$share/omarchy-boot-theme" grub-linux --linux-cfg "$work/linux.cfg" \
+    --rest-cfg "$work/rest.cfg" --entries "$work/entries" >"$work/menu.cfg"
+  # The mark from the live Plymouth theme first, then the pristine copy.
+  set --
+  for mark in /usr/share/plymouth/themes/omarchy/boot-mark.png /usr/share/omarchy/default/plymouth/boot-mark.png; do
+    if [ -f "$mark" ]; then set -- --mark "$mark"; break; fi
+  done
+  "$share/omarchy-boot-theme" grub --width "$width" --height "$height" \
+    --entries "$work/entries" --out "$work/theme" "$@"
+  size=$(sed -n 's/.*"Omarchy Boot Regular \([0-9]*\)".*/\1/p' "$work/theme/theme.txt" | head -n 1)
+  grub-mkfont -n "Omarchy Boot" -s "$size" -o "$work/theme/omarchy-boot.pf2" "$work/theme/omarchy-boot.bdf"
+  mkdir -p "$theme_dir"
+  for file in $theme_files; do
+    cp -- "$work/theme/$file" "$theme_dir/.$file.new"
+    mv -f -- "$theme_dir/.$file.new" "$theme_dir/$file"
+  done
+)
+
+if render >&2; then
+  cat "$work/menu.cfg"
+  echo "if false; then"
+  : >"$marker"
+else
+  echo "omarchy-boot-theme: theme rendering failed; keeping the stock menu" >&2
+fi
+cleanup
+exit 0
